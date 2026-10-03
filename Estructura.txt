@@ -1,0 +1,22 @@
+contextpack/
+├── main.py                 # Punto de entrada
+├── requirements.txt
+├── build.bat  
+├── contextpack.spec
+├── README.md
+├── logo.png
+├── models/
+│   ├── __init__.py
+│   └── data_models.py     # InfoArchivo, ResultadoEscaneo
+├── core/
+│   ├── __init__.py
+│   ├── config.py          # ConfigManager
+│   ├── scanner.py         # EscanerProyecto, FiltroArchivos
+│   ├── dependencies.py    # AnalizadorDependencias
+│   └── context.py         # ConstructorContexto
+└── ui/
+    ├── __init__.py
+    ├── main_window.py     # VentanaPrincipal
+    ├── main_panel.py      # VistaPanel
+    ├── dialogs.py         # DialogoSelectorCarpetas, DialogoAnalizarDep
+    └── model_view.py      # ModeloVista (lógica de presentación)

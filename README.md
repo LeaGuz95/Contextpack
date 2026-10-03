@@ -1,0 +1,410 @@
+# ContextPack
+
+App de escritorio (PySide6) que recorre un proyecto y arma un archivo de contexto para
+pasarle a un modelo de IA: árbol de directorios más el contenido de los archivos, con los
+valores sensibles reemplazados por `[REDACTADO]`.
+
+**v1.4.2** | PySide6 | Leandro Guzmán, Pucha Soft
+
+---
+
+## Instalar y ejecutar
+
+### Opción 1: el ejecutable
+
+`dist/ContextPack.exe` no necesita Python instalado. Doble clic y listo.
+
+### Opción 2: desde el código
+
+Necesitás Python 3.9 o superior (PySide6 6.10 exige `>=3.9,<3.15`).
+
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
+
+# Linux / macOS
+python3 -m venv venv
+source venv/bin/activate
+```
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+---
+
+## Cómo se usa
+
+### Flujo normal
+
+1. **Seleccionar**: elegís la carpeta del proyecto.
+2. **Escanear**: recorre los archivos y arma el contexto. La barra de progreso muestra
+   cuántos archivos lleva y cuál está procesando.
+3. Revisás el resultado: árbol a la izquierda, métricas a la derecha, vista previa abajo.
+4. **Copiar** o **Exportar**.
+
+Los botones se activan solos a medida que corresponde: al arrancar solo funciona
+`Seleccionar`; después de elegir carpeta se habilitan `Opciones`, `Analizar`, `Escanear` y
+`Nuevo`; recién cuando termina un escaneo se habilitan `Copiar` y `Exportar`.
+
+### Los botones
+
+| Botón | Qué hace |
+|---|---|
+| `Seleccionar` | Abre el selector de carpeta. Recuerda la última usada. |
+| `⚙️ Opciones` | Lista las carpetas de primer nivel del proyecto con checkboxes para incluir o excluir. Al confirmar, escanea directo. |
+| `🔍 Analizar` | Abre el árbol de archivos y escanea solo los relacionados con el que elijas, siguiendo imports. |
+| `Escanear` | Escaneo completo. Mientras corre se convierte en `⏹ Cancelar`. |
+| `🔄 Nuevo` | Limpia todo para empezar con otro proyecto (pide confirmación). |
+| `📋 Copiar` | Pega el contexto en Markdown al portapapeles. |
+| `💾 Exportar` | Guarda el contexto como `.md` (Markdown) o `.txt` (texto plano). |
+
+**Cancelar**: el botón `Escanear` pasa a `⏹ Cancelar` mientras hay trabajo en curso. Al
+cancelar queda un mensaje de "Escaneo cancelado" por 2 segundos y la interfaz se libera.
+
+El escaneo corre en un hilo aparte (`core/scanner_thread.py`), así que la ventana no se
+congela aunque el proyecto sea grande.
+
+### Buscar en la vista previa
+
+La barra de búsqueda filtra dentro del texto generado. `Enter` o `▼` vai al siguiente
+resultado, `▲` al anterior. Cuando no hay más coincidencias vuelve al principio o al final
+del documento, según el sentido.
+
+### Menús
+
+- **Archivo → Recientes**: los últimos 10 proyectos escaneados. Al elegir uno solo se
+  completa la ruta, hay que volver a pulsar `Escanear`. Las entradas que apuntan a carpetas
+  que ya no existen se ocultan solas.
+- **Archivo → Limpiar Historial**: vacía la lista de recientes.
+- **Ayuda → Acerca de**: versión y autoría.
+
+---
+
+## Qué entra y qué no
+
+### Extensiones que se incluyen
+
+```
+.c  .cpp  .cs  .css  .env  .go  .h  .html  .java  .js  .json
+.jsx .md  .php  .py  .rb  .rs  .scss  .toml  .ts  .tsx  .txt
+.xml  .yaml  .yml
+```
+
+Cualquier otra extensión queda afuera. Por eso no aparecen imágenes (`.png`, `.jpg`,
+`.gif`, `.bmp`) ni binarios (`.exe`, `.dll`, `.so`, `.zip`, `.pdf`): no es una regla
+aparte, sencillamente no están en la lista.
+
+### Carpetas que se ignoran siempre
+
+```
+.git  .venv  __pycache__  bin  build  dist  env  node_modules  obj  venv
+```
+
+Además **toda carpeta cuyo nombre arranque con punto** queda fuera, así que `.github`,
+`.vscode`, `.pytest_cache` y similares nunca se escanean.
+
+### Archivos que nunca se incluyen
+
+Estos están explícitamente bloqueados, aunque su extensión sea válida:
+
+```
+Pipfile.lock  composer.lock  credentials.json  package-lock.json
+poetry.lock   private.key     secrets.json      yarn.lock
+```
+
+Los lockfiles se excluyen a propósito: son largos y no aportan nada al contexto de IA.
+
+### Archivos .env
+
+Se incluyen y se redactan. Se reconocen `.env`, `.env.local`, `.env.production`,
+`.env.development`, `.env.staging`, `.env.test` y cualquier archivo con extensión `.env`
+(por ejemplo `config.env`).
+
+### .gitignore del proyecto
+
+Si el proyecto tiene un `.gitignore` en la raíz, se aplica. Soporta comodines `*`, negaciones
+`!` y el sufijo `/` para carpetas. Las negaciones ganan sobre las reglas de exclusión, así
+que `!importante.py` fuerza la inclusión de un archivo que otro patrón dejaría afuera.
+
+Solo se lee el `.gitignore` de la raíz, no los de subcarpetas.
+
+---
+
+## Redacción de secretos
+
+`core/redactor.py` reemplaza los valores sensibles por `[REDACTADO]` antes de armar el
+contexto. Cuando redacta algo, lo anota: cada archivo afectado lleva un aviso
+`[AVISO: N valor(es) sensible(s) redactado(s)]` y al final del documento aparece una
+`NOTA DE SEGURIDAD` con el total.
+
+### Archivos .env
+
+Se procesan línea por línea con formato `CLAVE=VALOR`. Se redacta el valor solo si el
+**nombre de la clave** coincide con un patrón sensible. `DATABASE_URL`, `API_KEY` o
+`STRIPE_SECRET` se tapan; `PORT=3000` o `DEBUG=true` se dejan tal cual, porque no son
+secretos.
+
+### Archivos de código
+
+Cubre `.py`, `.js`, `.ts`, `.tsx`, `.jsx`, `.cs`, `.java`, `.go`, `.rb`, `.php`, `.yaml`,
+`.yml`, `.json`, `.xml` y `.toml`. Busca:
+
+- URLs de base de datos (`postgres://`, `mysql://`, `mongodb://`, `redis://`, `sqlite://`,
+  `mssql://`, `oracle://`) → `[REDACTADO:URL_BD]`
+- Tokens `Bearer <algo>` → `[REDACTADO:TOKEN]`
+- Formatos de keys conocidas: `sk-` (OpenAI), `ghp_` (GitHub), `xoxb-`/`xoxp-` (Slack),
+  `AKIA` (AWS), `AIza` (Google) → `[REDACTADO:API_KEY]`
+- Asignaciones con nombre sensible: `api_key = "valor"` → `api_key = "[REDACTADO]"`, con al
+  menos 4 caracteres
+
+### Lo que NO se redacta
+
+Markdown, texto plano, HTML, CSS, SCSS, C, C++ y headers **no pasan por el redactor**. Si
+tenés una key escrita en un `.md` o en un `.h`, va a salir tal cual. Revisá la vista previa
+antes de exportar.
+
+Por eso Exportar pide marcar "He verificado" antes de escribir el archivo. Para que la
+advertencia deje de aparecer, poné `mostrar_advertencia_seguridad` en `false` dentro de
+`~/.contextpack/config.json`.
+
+---
+
+## Métricas y ventana de contexto
+
+El panel derecho muestra archivos incluidos, archivos ignorados, líneas totales y una
+**estimación de tokens** (un token cada 4 caracteres del contexto en texto plano). Sobre esa
+estimación aparece una advertencia según el tamaño:
+
+| Tokens estimados | Indicación |
+|---|---|
+| Hasta 100.000 | Compatible con GPT-4 y Claude |
+| Más de 100.000 | Compatible con Claude, GPT-4 al límite |
+| Más de 128.000 | Grande para GPT-4, usá Claude |
+| Más de 180.000 | Muy grande: conviene usar `Opciones` o `Analizar` |
+
+La estimación es aproximada, no un conteo real de tokens.
+
+---
+
+## Exportar
+
+`Exportar` propone el nombre `contexto_<nombre_de_la_carpeta>.md` en tu carpeta home, y el
+diálogo te deja cambiar la extensión:
+
+- `.md` → formato Markdown, con headers y code fences por archivo. La IA distingue el
+  código de la estructura.
+- `.txt` → texto plano.
+
+`Copiar` siempre usa Markdown.
+
+---
+
+## Formato de salida
+
+Salida real de la app sobre un proyecto con `README.md`, `main.py` y `src/utils.py`, donde
+`main.py` tenía una API key:
+
+````markdown
+# CONTEXTO DEL PROYECTO
+
+**RAÍZ:** `C:\ruta\al\proyecto`
+**TOTAL_ARCHIVOS:** 3
+**TOTAL_LÍNEAS:** 10
+
+## ÁRBOL DE DIRECTORIOS
+
+```text
+├── 📁 ./
+│   ├── README.md
+│   └── main.py
+└── 📁 src/
+    └── utils.py
+```
+
+## ARCHIVO: README.md
+
+```markdown
+# Mi proyecto
+
+Un proyecto de ejemplo.
+```
+
+## ARCHIVO: main.py
+
+> [AVISO: 1 valor(es) sensible(s) redactado(s) en este archivo]
+
+```python
+import os
+
+API_KEY = '[REDACTADO:API_KEY]'
+
+print(os.getcwd())
+```
+
+## ARCHIVO: src\utils.py
+
+```python
+def help():
+    return 1
+```
+
+## NOTA DE SEGURIDAD
+
+- Se redactaron **1** valor(es) sensible(s) (API keys, URLs de BD, contraseñas, tokens).
+- Los valores fueron reemplazados por `[REDACTADO]` para proteger información confidencial.
+````
+
+Cuando el redactor reconoce el tipo de secreto, el marcador lo dice: `[REDACTADO:API_KEY]`,
+`[REDACTADO:URL_BD]` o `[REDACTADO:TOKEN]`. Si solo detectó una asignación con nombre
+sensible, deja el `[REDACTADO]` genérico.
+
+Dos detalles que sorprenden al primer uso:
+
+- **La raíz siempre es un nodo `📁 ./`.** Los archivos que están en el primer nivel del
+  proyecto quedan adentro de ese nodo, no sueltos al principio del árbol.
+- **Las rutas de los archivos usan el separador del sistema**, `src\utils.py` en Windows,
+  aunque el árbol de directorios use `/`. Es cosmético, pero desorienta si buscás un archivo
+  con Ctrl+F.
+
+El formato `.txt` tiene la misma información en plano, con separadores `=====` en lugar de
+headers y sin code fences:
+
+```
+===== CONTEXTO DEL PROYECTO =====
+RAÍZ: C:\ruta\al\proyecto
+TOTAL_ARCHIVOS: 3
+TOTAL_LÍNEAS: 10
+
+===== ÁRBOL DE DIRECTORIOS =====
+├── 📁 ./
+│   ├── README.md
+│   └── main.py
+└── 📁 src/
+    └── utils.py
+
+===== ARCHIVO: README.md =====
+# Mi proyecto
+
+Un proyecto de ejemplo.
+
+===== ARCHIVO: main.py =====
+# [AVISO: 1 valor(es) sensible(s) redactado(s) en este archivo]
+import os
+
+API_KEY = '[REDACTADO:API_KEY]'
+
+print(os.getcwd())
+
+===== ARCHIVO: src\utils.py =====
+def help():
+    return 1
+
+===== NOTA DE SEGURIDAD =====
+Se redactaron 1 valor(es) sensible(s) (API keys, URLs de BD, contraseñas, tokens).
+Los valores fueron reemplazados por [REDACTADO] para proteger información confidencial.
+```
+
+El `NOTA DE SEGURIDAD` del final solo se agrega cuando hubo redacciones.
+
+---
+
+## Analizar dependencias
+
+`🔍 Analizar` es la vía para meter un proyecto grande en el contexto: en vez de escanearlo
+todo, elegís un archivo y se incluye solo lo que ese archivo toca, siguiendo imports de forma
+recursiva hasta 3 niveles de profundidad.
+
+Lenguajes con análisis de imports: **Python**, **JavaScript/TypeScript** (`.js`, `.jsx`,
+`.ts`, `.tsx`), **C#**, **Java** y **Go**.
+
+Detalles del comportamiento:
+
+- Solo se incluyen archivos que están dentro de la carpeta raíz del proyecto. Las librerías
+  externas y la biblioteca estándar se descartan.
+- **Java**: además de los `import`, detecta clases del mismo package usadas con `new Clase()`
+  sin import explícito.
+- **C#**: un `using MiNamespace` trae todos los `.cs` de esa carpeta, filtrados por los
+  nombres de clase que aparecen en el archivo original.
+- **Go**: lee el nombre del módulo del `go.mod` para resolver imports internos, y excluye los
+  archivos `_test.go`.
+
+**Cómo usarlo**: elegís el archivo con un clic y presioná `Analizar`, o hacés doble clic
+sobre él y el escaneo arranca directo.
+
+---
+
+## Archivos de configuración y log
+
+Todo va a `~/.contextpack/`:
+
+| Archivo | Contenido |
+|---|---|
+| `config.json` | Preferencias y proyectos recientes |
+| `contextpack.log` | Log de la app, nivel DEBUG |
+
+Claves de `config.json`:
+
+| Clave | Qué es |
+|---|---|
+| `ultima_carpeta` | Carpeta desde la que abre el selector |
+| `proyectos_recientes` | Últimos 10 proyectos, del más reciente al más viejo |
+| `mostrar_advertencia_seguridad` | Si Exportar pide marcar "He verificado" |
+| `ventana_ancho` / `ventana_alto` | Tamaño de la ventana, guardado al cerrar |
+
+---
+
+## Estructura del proyecto
+
+```
+ContextPack/
+├── main.py                       # Punto de entrada
+├── contextpack.spec              # Configuración de PyInstaller
+├── requirements.txt
+├── logo.ico
+├── README.md
+├── core/
+│   ├── config.py                 # ConfigManager: preferencias y recientes
+│   ├── scanner.py                # EscanerProyecto, FiltroArchivos, LectorGitignore
+│   ├── scanner_thread.py         # Hilo de escaneo no bloqueante
+│   ├── dependencies.py           # AnalizadorDependencias: imports y resolución
+│   ├── redactor.py               # RedactorSensible: API keys, contraseñas, URLs de BD
+│   └── context.py                # ConstructorContexto: salida TXT y Markdown
+├── models/
+│   └── data_models.py            # InfoArchivo, ResultadoEscaneo
+└── ui/
+    ├── main_window.py            # VentanaPrincipal, menú, footer
+    ├── main_panel.py             # VistaPanel: controles, árbol, métricas, búsqueda
+    ├── dialogs.py                # Selección de carpetas y de archivo a analizar
+    ├── model_view.py             # ModeloVista: cachea el contexto entre vistas
+    └── theme.py                  # Hoja de estilos
+```
+
+El flujo va `VistaPanel` → `ModeloVista` → `EscanerProyecto` / `AnalizadorDependencias` →
+`ConstructorContexto` → `RedactorSensible`. La UI nunca habla directo con el escáner, y el
+contexto generado se cachea para no releer y re-redactar todos los archivos en cada
+actualización de la vista.
+
+---
+
+## Compilar el ejecutable
+
+PyInstaller no está en `requirements.txt` porque solo hace falta para compilar:
+
+```bash
+pip install pyinstaller
+pyinstaller --clean --noconfirm contextpack.spec
+```
+
+Queda en `dist/ContextPack.exe`. El spec genera un archivo único y sin ventana de consola,
+con `logo.ico` embebido. Pesa unos 44 MB (medido sobre el build de v1.4.2), casi todo
+PySide6.
+
+Dos detalles del spec:
+
+- `upx=True` está activado. Si no tenés UPX instalado, PyInstaller avisa y sigue sin
+  comprimir.
+- El `build/` que deja PyInstaller es cache de compilación. `build/` y `dist/` están en
+  `.gitignore`.

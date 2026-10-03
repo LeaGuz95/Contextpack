@@ -1,0 +1,78 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pdb
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# Build / distribución (PyInstaller)
+build/
+dist/
+*.manifest
+*.manifest.db
+spec_cache/
+
+# Paquetes / wheels
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+wheels/
+
+# Testing / calidad
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+nosetests.xml
+
+# Logs
+*.log
+logs/
+
+# Salida generada por la propia app al escanear este proyecto
+contexto*.md
+contexto*.txt
+CONTEXT*.md
+context_pack*.md
+context_pack*.txt
+
+# Secrets y config local
+.env
+.env.*
+!.env.example
+config.local.json
+
+# IDE y editores
+.vscode/
+.idea/
+.vs/
+*.sublime-project
+*.sublime-workspace
+.history/
+*.bak
+*~
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.tmp
+*.temp
+
+# Basura generada por pip mal escapado (build.bat antiguo)
+/[0-9]+.[0-9]+.[0-9]+/
