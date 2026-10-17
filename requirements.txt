@@ -1,1 +1,2 @@
 PySide6>=6.6.0
+tiktoken>=0.7.0  # opcional; si no está, ContextPack estima los tokens

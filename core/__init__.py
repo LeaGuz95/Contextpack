@@ -4,6 +4,7 @@ from .dependencies import AnalizadorDependencias
 from .context import ConstructorContexto
 from .redactor import RedactorSensible
 from .scanner_thread import HiloEscaneo
+from .tokenizer import Tokenizador, obtener_tokenizador
 
 __all__ = [
     'ConfigManager',
@@ -12,5 +13,7 @@ __all__ = [
     'AnalizadorDependencias',
     'ConstructorContexto',
     'RedactorSensible',
-    'HiloEscaneo'
+    'HiloEscaneo',
+    'Tokenizador',
+    'obtener_tokenizador'
 ]

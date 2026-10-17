@@ -25,7 +25,7 @@ class VentanaPrincipal(QMainWindow):
         self.config = config
         self.modelo = ModeloVista(config)
 
-        self.setWindowTitle("ContextPack v1.4.2 — Pucha Soft")
+        self.setWindowTitle("ContextPack v1.5.0 — Pucha Soft")
         self.setGeometry(
             100, 100,
             config.config.get('ventana_ancho', 1200),
@@ -74,7 +74,7 @@ class VentanaPrincipal(QMainWindow):
         lbl_autor = QLabel("Desarrollado por <b>Leandro Guzmán</b> | Pucha Soft")
         lbl_autor.setStyleSheet("color: #5A5A7A; font-size: 11px;")
 
-        lbl_ver = QLabel("v1.4.2")
+        lbl_ver = QLabel("v1.5.0")
         lbl_ver.setStyleSheet("color: #4A9FFF; font-size: 11px; font-weight: 600;")
 
         fl.addWidget(lbl_autor)
@@ -141,7 +141,7 @@ class VentanaPrincipal(QMainWindow):
         QMessageBox.about(
             self,
             "Acerca de",
-            "<h2>ContextPack v1.4.2 </h2>"
+            "<h2>ContextPack v1.5.0 </h2>"
             "<p><b>Desarrollado por:</b> Leandro Guzmán<br>"        
             "<p>Generador de contexto para IA</p>"
             "<hr><p><i>© 2026 Pucha Soft</i></p>"

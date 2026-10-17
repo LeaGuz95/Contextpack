@@ -29,6 +29,7 @@ class ConfigManager:
             'ultima_carpeta': str(Path.home()),
             'proyectos_recientes': [],
             'mostrar_advertencia_seguridad': True,
+            'modelo_objetivo': 'Personalizado',
             'ventana_ancho': 1200,
             'ventana_alto': 850
         }

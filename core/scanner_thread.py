@@ -7,6 +7,7 @@ from typing import Optional, List
 from PySide6.QtCore import QThread, Signal
 
 from .scanner import EscanerProyecto
+from .tokenizer import obtener_tokenizador
 from models.data_models import ResultadoEscaneo
 
 
@@ -40,6 +41,10 @@ class HiloEscaneo(QThread):
     def run(self):
         """Ejecuta el escaneo en el thread secundario"""
         try:
+            # Carga el tokenizador aquí: la primera vez tiktoken descarga su
+            # vocabulario y no conviene hacerlo en el hilo de la interfaz.
+            obtener_tokenizador()
+
             resultado = self._escaner.escanear(
                 self.raiz,
                 self.carpetas,

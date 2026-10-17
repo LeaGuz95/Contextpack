@@ -12,6 +12,8 @@ class InfoArchivo:
     ruta: Path
     ruta_relativa: str
     lineas: int
+    tamano_bytes: int = 0
+    token_count: int = 0   # se completa al construir el contexto (ya redactado)
 
 
 @dataclass

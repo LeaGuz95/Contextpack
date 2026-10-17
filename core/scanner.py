@@ -232,7 +232,8 @@ class EscanerProyecto:
                         archivos.append(InfoArchivo(
                             ruta=arch,
                             ruta_relativa=str(arch.relative_to(raiz)),
-                            lineas=lin
+                            lineas=lin,
+                            tamano_bytes=self._tamano(arch)
                         ))
                         lineas += lin
                         contador += 1
@@ -281,7 +282,8 @@ class EscanerProyecto:
                     archivos.append(InfoArchivo(
                         ruta=arch,
                         ruta_relativa=rel_arch,
-                        lineas=lin
+                        lineas=lin,
+                        tamano_bytes=self._tamano(arch)
                     ))
                     lineas += lin
                     contador += 1
@@ -313,6 +315,14 @@ class EscanerProyecto:
         )
 
     # ── HELPERS ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _tamano(arch: Path) -> int:
+        """Tamaño en bytes de un archivo, o 0 si no se puede leer"""
+        try:
+            return arch.stat().st_size
+        except OSError:
+            return 0
 
     def _filtrar_dirs(self, dirs: List[str], rel_dir: Path) -> List[str]:
         """Filtra los subdirectorios según las reglas del proyecto y .gitignore"""

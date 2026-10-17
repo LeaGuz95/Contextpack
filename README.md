@@ -4,7 +4,7 @@ App de escritorio (PySide6) que recorre un proyecto y arma un archivo de context
 pasarle a un modelo de IA: árbol de directorios más el contenido de los archivos, con los
 valores sensibles reemplazados por `[REDACTADO]`.
 
-**v1.4.2** | PySide6 | Leandro Guzmán, Pucha Soft
+**v1.5.0** | PySide6 | Leandro Guzmán, Pucha Soft
 
 ---
 
@@ -174,18 +174,29 @@ advertencia deje de aparecer, poné `mostrar_advertencia_seguridad` en `false` d
 
 ## Métricas y ventana de contexto
 
-El panel derecho muestra archivos incluidos, archivos ignorados, líneas totales y una
-**estimación de tokens** (un token cada 4 caracteres del contexto en texto plano). Sobre esa
-estimación aparece una advertencia según el tamaño:
+El panel derecho muestra archivos incluidos, archivos ignorados, líneas totales y el
+**total de tokens** del contexto generado. El conteo lo hace `tiktoken` (encoding
+`o200k_base`, con respaldo a `cl100k_base`); si `tiktoken` no está instalado o todavía no
+bajó su vocabulario, cae a una estimación offline. El tooltip del número indica cuál se está
+usando.
 
-| Tokens estimados | Indicación |
+También hay un selector **Modelo objetivo** con el límite de cada chat:
+
+| Modelo objetivo | Límite |
 |---|---|
-| Hasta 100.000 | Compatible con GPT-4 y Claude |
-| Más de 100.000 | Compatible con Claude, GPT-4 al límite |
-| Más de 128.000 | Grande para GPT-4, usá Claude |
-| Más de 180.000 | Muy grande: conviene usar `Opciones` o `Analizar` |
+| ChatGPT / GPT-4o | 128.000 |
+| Claude Sonnet / Opus | 200.000 |
+| DeepSeek | 64.000 |
+| Grok | 128.000 |
+| Gemini 1.5 Pro | 1.000.000 |
+| Personalizado | sin límite |
 
-La estimación es aproximada, no un conteo real de tokens.
+Con un modelo elegido, el aviso dice cuánto del límite estás usando (`Uso: 43%`) o cuántos
+tokens sobran. Con `Personalizado` se muestra una guía general por tamaño. La elección queda
+guardada en `config.json`.
+
+El árbol de archivos tiene tres columnas — **Archivos**, **Tamaño** y **Tokens** — y las
+carpetas muestran el total acumulado de su rama, así se ve de un vistazo qué pesa más.
 
 ---
 
@@ -352,6 +363,7 @@ Claves de `config.json`:
 | `ultima_carpeta` | Carpeta desde la que abre el selector |
 | `proyectos_recientes` | Últimos 10 proyectos, del más reciente al más viejo |
 | `mostrar_advertencia_seguridad` | Si Exportar pide marcar "He verificado" |
+| `modelo_objetivo` | Modelo elegido en el selector de ventana de contexto |
 | `ventana_ancho` / `ventana_alto` | Tamaño de la ventana, guardado al cerrar |
 
 ---
@@ -371,7 +383,8 @@ ContextPack/
 │   ├── scanner_thread.py         # Hilo de escaneo no bloqueante
 │   ├── dependencies.py           # AnalizadorDependencias: imports y resolución
 │   ├── redactor.py               # RedactorSensible: API keys, contraseñas, URLs de BD
-│   └── context.py                # ConstructorContexto: salida TXT y Markdown
+│   ├── context.py                # ConstructorContexto: salida TXT y Markdown
+│   └── tokenizer.py              # Tokenizador: conteo real (tiktoken) o estimado
 ├── models/
 │   └── data_models.py            # InfoArchivo, ResultadoEscaneo
 └── ui/
@@ -383,9 +396,9 @@ ContextPack/
 ```
 
 El flujo va `VistaPanel` → `ModeloVista` → `EscanerProyecto` / `AnalizadorDependencias` →
-`ConstructorContexto` → `RedactorSensible`. La UI nunca habla directo con el escáner, y el
-contexto generado se cachea para no releer y re-redactar todos los archivos en cada
-actualización de la vista.
+`ConstructorContexto` (que usa `RedactorSensible` y `Tokenizador`). La UI nunca habla directo
+con el escáner, y el contexto generado se cachea para no releer y re-redactar todos los
+archivos en cada actualización de la vista.
 
 ---
 

@@ -5,6 +5,7 @@ import logging
 from typing import Dict
 from models.data_models import ResultadoEscaneo
 from .redactor import RedactorSensible
+from .tokenizer import obtener_tokenizador
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class ConstructorContexto:
 
     def __init__(self):
         self.redactor = RedactorSensible()
+        self.tokenizador = obtener_tokenizador()
 
     def construir(self, resultado: ResultadoEscaneo) -> str:
         """
@@ -128,13 +130,17 @@ class ConstructorContexto:
         return "\n".join(lineas)
 
     def _contenido_archivo(self, info) -> tuple:
-        """Lee y redacta el contenido de un archivo"""
+        """Lee, redacta y tokeniza el contenido de un archivo"""
         try:
             contenido = info.ruta.read_text(encoding='utf-8', errors='ignore')
-            return self.redactor.redactar(info.ruta, contenido)
+            contenido_final, n = self.redactor.redactar(info.ruta, contenido)
         except Exception:
             logger.debug('No se pudo leer %s', info.ruta, exc_info=True)
+            info.token_count = 0
             return "[Error al leer archivo]", 0
+
+        info.token_count = self.tokenizador.contar(contenido_final)
+        return contenido_final, n
 
     def _lenguaje_fence(self, ruta) -> str:
         """Devuelve el lenguaje para el code fence según la extensión"""

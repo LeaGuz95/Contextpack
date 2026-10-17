@@ -45,12 +45,16 @@ class ModeloVista:
 
     def metricas(self) -> Dict:
         """Obtiene métricas del escaneo actual"""
+        tok = self.constructor.tokenizador
+
         if not self.resultado:
             return {
                 'total_archivos': 0,
                 'archivos_ignorados': 0,
                 'total_lineas': 0,
-                'tokens': 0
+                'tokens': 0,
+                'tokenizador': tok.nombre,
+                'tokens_exactos': tok.exacto
             }
 
         ctx = self.generar_contexto()
@@ -59,5 +63,7 @@ class ModeloVista:
             'total_archivos': len(self.resultado.archivos),
             'archivos_ignorados': self.resultado.cantidad_ignorados,
             'total_lineas': self.resultado.total_lineas,
-            'tokens': len(ctx) // 4  # Estimación aproximada
+            'tokens': tok.contar(ctx),
+            'tokenizador': tok.nombre,
+            'tokens_exactos': tok.exacto
         }

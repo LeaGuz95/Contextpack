@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QTreeWidget, QTreeWidgetItem, QTextEdit,
     QLabel, QSplitter, QMessageBox, QLineEdit, QApplication,
-    QProgressBar
+    QProgressBar, QComboBox, QHeaderView
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QTextCursor
@@ -16,6 +16,17 @@ from PySide6.QtGui import QTextCursor
 from core import ConfigManager, HiloEscaneo
 from .model_view import ModeloVista
 from .dialogs import DialogoSelectorCarpetas, DialogoAnalizarDep
+
+
+# Modelos objetivo: (etiqueta, límite de tokens) — None = sin límite
+MODELOS_OBJETIVO = [
+    ("Personalizado", None),
+    ("ChatGPT / GPT-4o (128k)", 128000),
+    ("Claude Sonnet / Opus (200k)", 200000),
+    ("DeepSeek (64k)", 64000),
+    ("Grok (128k)", 128000),
+    ("Gemini 1.5 Pro (1M)", 1000000),
+]
 
 
 class VistaPanel(QWidget):
@@ -29,6 +40,8 @@ class VistaPanel(QWidget):
         self._hilo = None          # referencia al thread activo
         self._carpetas_pendientes = None
         self._dep_pendiente = None
+        self._tokens_actuales = 0
+        self._mapa_archivos = {}
         self._init_ui()
 
     def _init_ui(self):
@@ -128,16 +141,28 @@ class VistaPanel(QWidget):
         split = QSplitter(Qt.Horizontal)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabel("Archivos")
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Archivos", "Tamaño", "Tokens"])
+        self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         split.addWidget(self.tree)
 
         metricas = QWidget()
         ml = QVBoxLayout(metricas)
 
+        ml.addWidget(QLabel("Modelo objetivo:"))
+        self.cmb_modelo = QComboBox()
+        for etiqueta, limite in MODELOS_OBJETIVO:
+            self.cmb_modelo.addItem(etiqueta, limite)
+        self._restaurar_modelo()
+        self.cmb_modelo.currentIndexChanged.connect(self._on_modelo_cambiado)
+        ml.addWidget(self.cmb_modelo)
+
         self.lbl_files  = QLabel("Archivos: 0")
         self.lbl_ign    = QLabel("Ignorados: 0")
         self.lbl_lines  = QLabel("Líneas: 0")
-        self.lbl_tokens = QLabel("Tokens: ~0")
+        self.lbl_tokens = QLabel("Tokens: 0")
         self.lbl_rec    = QLabel("")
         self.lbl_rec.setWordWrap(True)
 
@@ -152,6 +177,19 @@ class VistaPanel(QWidget):
 
         layout.addWidget(split, 1)
 
+    def _restaurar_modelo(self):
+        """Restaura el modelo objetivo guardado en la configuración"""
+        guardado = self.config.config.get('modelo_objetivo', 'Personalizado')
+        idx = self.cmb_modelo.findText(guardado)
+        if idx >= 0:
+            self.cmb_modelo.setCurrentIndex(idx)
+
+    def _on_modelo_cambiado(self):
+        """Persiste el modelo objetivo y recalcula la recomendación"""
+        self.config.config['modelo_objetivo'] = self.cmb_modelo.currentText()
+        self.config.guardar()
+        self._actualizar_recomendacion()
+
     # ── ACCIONES ────────────────────────────────────────────────────────────
 
     def _nuevo(self):
@@ -164,6 +202,8 @@ class VistaPanel(QWidget):
             return
 
         self.ruta = None
+        self._tokens_actuales = 0
+        self._mapa_archivos = {}
         self.lbl_ruta.setText("Sin proyecto")
         self.tree.clear()
         self.txt_prev.clear()
@@ -171,6 +211,7 @@ class VistaPanel(QWidget):
 
         for lbl in [self.lbl_files, self.lbl_ign, self.lbl_lines, self.lbl_tokens]:
             lbl.setText(lbl.text().split(':')[0] + ": 0")
+        self.lbl_tokens.setToolTip("")
         self.lbl_rec.setText("")
 
         for btn in [self.btn_esc, self.btn_opc, self.btn_dep,
@@ -308,42 +349,136 @@ class VistaPanel(QWidget):
         self.lbl_files.setText(f"Archivos: {m['total_archivos']}")
         self.lbl_ign.setText(f"Ignorados: {m['archivos_ignorados']}")
         self.lbl_lines.setText(f"Líneas: {m['total_lineas']:,}")
-        self.lbl_tokens.setText(f"Tokens: ~{m['tokens']:,}")
+        self.lbl_tokens.setText(f"Tokens: {m['tokens']:,}")
 
-        t = m['tokens']
-        if t > 180000:
-            self.lbl_rec.setText("⚠️ MUY GRANDE\nUsa Opciones o Analizar")
-            self.lbl_rec.setStyleSheet("color: #d32f2f; font-weight: bold;")
-        elif t > 128000:
-            self.lbl_rec.setText("⚠️ Grande para GPT-4\n✅ Usar Claude")
-            self.lbl_rec.setStyleSheet("color: #f57c00;")
-        elif t > 100000:
-            self.lbl_rec.setText("✅ Compatible Claude\n⚠️ GPT-4 al límite")
-            self.lbl_rec.setStyleSheet("color: #388e3c;")
+        motor = m['tokenizador']
+        if m['tokens_exactos']:
+            self.lbl_tokens.setToolTip(f"Conteo exacto — {motor}")
         else:
-            self.lbl_rec.setText("✅ Compatible GPT-4 y Claude")
-            self.lbl_rec.setStyleSheet("color: #388e3c;")
+            self.lbl_tokens.setToolTip(
+                f"Estimación aproximada — {motor}\n"
+                "Instalá tiktoken para un conteo exacto."
+            )
 
+        self._tokens_actuales = m['tokens']
+        self._actualizar_recomendacion()
         self._poblar_arbol()
         self.txt_prev.setPlainText(self.modelo.generar_contexto())
 
-    def _poblar_arbol(self):
-        """Puebla el árbol de archivos"""
-        self.tree.clear()
-        arbol = self.modelo.resultado.arbol_directorios
+    def _actualizar_recomendacion(self):
+        """Ajusta el aviso según el modelo objetivo elegido"""
+        if not self.modelo.resultado:
+            self.lbl_rec.setText("")
+            return
 
-        if '.' in arbol:
-            self._agregar_items(self.tree, arbol['.'])
+        t = self._tokens_actuales
+        limite = self.cmb_modelo.currentData()
+
+        if limite is None:
+            # Guía general cuando no hay un modelo objetivo fijo
+            if t > 180000:
+                texto = "⚠️ MUY GRANDE\nUsá Opciones o Analizar"
+                color, negrita = "#d32f2f", "bold"
+            elif t > 128000:
+                texto = "⚠️ Grande para GPT-4\n✅ Claude lo acepta"
+                color, negrita = "#f57c00", "normal"
+            elif t > 100000:
+                texto = "✅ Claude sin problema\n⚠️ GPT-4 al límite"
+                color, negrita = "#388e3c", "normal"
+            else:
+                texto = "✅ Entra en GPT-4 y Claude"
+                color, negrita = "#388e3c", "normal"
         else:
-            self._agregar_items(self.tree, arbol)
+            etiqueta = self.cmb_modelo.currentText()
+            pct = t / limite * 100
+            if t <= limite:
+                texto = (
+                    f"✅ Entra en {etiqueta}\n"
+                    f"Uso: {pct:.1f}% ({t:,}/{limite:,})"
+                )
+                color, negrita = "#388e3c", "normal"
+            else:
+                texto = (
+                    f"⚠️ Excede {etiqueta}\n"
+                    f"Sobran {t - limite:,} tokens"
+                )
+                color, negrita = "#d32f2f", "bold"
 
-    def _agregar_items(self, padre, dic: Dict):
-        """Agrega items al árbol recursivamente"""
+        self.lbl_rec.setText(texto)
+        self.lbl_rec.setStyleSheet(f"color: {color}; font-weight: {negrita};")
+
+    def _poblar_arbol(self):
+        """Puebla el árbol de archivos con tamaño y tokens"""
+        self.tree.clear()
+        resultado = self.modelo.resultado
+        if not resultado:
+            self._mapa_archivos = {}
+            return
+
+        self._mapa_archivos = {
+            self._clave(info.ruta_relativa): info for info in resultado.archivos
+        }
+
+        arbol = resultado.arbol_directorios or {}
+
+        # El escáner guarda los archivos de la raíz bajo la clave '.' y las
+        # carpetas de primer nivel como claves hermanas. Se fusionan para que
+        # el árbol muestre raíz y subcarpetas juntas.
+        raiz = dict(arbol.get('.', {}))
+        for nombre, sub in arbol.items():
+            if nombre != '.':
+                raiz[nombre] = sub
+
+        self._agregar_items(self.tree, raiz, '')
+
+    def _agregar_items(self, padre, dic: Dict, prefijo: str = '') -> tuple:
+        """
+        Agrega items al árbol recursivamente.
+        Devuelve (tokens, bytes) acumulados de toda la rama.
+        """
+        tokens_total = 0
+        bytes_total = 0
+
         for nombre, sub in sorted(dic.items(), key=lambda x: (x[1] is not None, x[0])):
+            rel = f"{prefijo}/{nombre}" if prefijo else nombre
             item = QTreeWidgetItem(padre)
-            item.setText(0, f"📁 {nombre}" if sub is not None else nombre)
-            if sub:
-                self._agregar_items(item, sub)
+
+            if sub is not None:
+                item.setText(0, f"📁 {nombre}")
+                tokens, bytes_ = self._agregar_items(item, sub, rel)
+                tokens_total += tokens
+                bytes_total += bytes_
+                item.setText(1, self._formato_kb(bytes_total))
+                item.setText(2, f"{tokens:,}" if tokens else "")
+                item.setToolTip(2, f"{tokens:,} tokens en esta carpeta")
+            else:
+                item.setText(0, nombre)
+                info = self._mapa_archivos.get(self._clave(rel))
+                if info:
+                    tokens_total += info.token_count
+                    bytes_total += info.tamano_bytes
+                    item.setText(1, self._formato_kb(info.tamano_bytes))
+                    item.setText(2, f"{info.token_count:,}" if info.token_count else "—")
+                    item.setToolTip(2, f"{info.token_count:,} tokens")
+
+        return tokens_total, bytes_total
+
+    @staticmethod
+    def _clave(ruta: str) -> str:
+        """Normaliza separadores para comparar rutas relativas"""
+        return ruta.replace('\\', '/')
+
+    @staticmethod
+    def _formato_kb(bytes_: int) -> str:
+        """Formatea un tamaño en bytes como B/KB/MB legibles"""
+        if not bytes_:
+            return ""
+        if bytes_ < 1024:
+            return f"{bytes_} B"
+        kb = bytes_ / 1024
+        if kb >= 1024:
+            return f"{kb / 1024:,.1f} MB"
+        return f"{kb:,.1f} KB"
 
     def _copiar(self):
         """Copia el contexto al portapapeles"""
