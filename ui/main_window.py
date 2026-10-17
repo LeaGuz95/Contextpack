@@ -25,7 +25,7 @@ class VentanaPrincipal(QMainWindow):
         self.config = config
         self.modelo = ModeloVista(config)
 
-        self.setWindowTitle("ContextPack v1.5.0 — Pucha Soft")
+        self.setWindowTitle("ContextPack v1.9.0 — Pucha Soft")
         self.setGeometry(
             100, 100,
             config.config.get('ventana_ancho', 1200),
@@ -61,6 +61,34 @@ class VentanaPrincipal(QMainWindow):
         layout.addWidget(footer)
 
         self.setCentralWidget(central)
+        self.setAcceptDrops(True)
+
+    @staticmethod
+    def _carpeta_arrastrada(event):
+        """Devuelve la primera carpeta local del arrastre, o None"""
+        datos = event.mimeData()
+        if not datos.hasUrls():
+            return None
+        for url in datos.urls():
+            if url.isLocalFile():
+                ruta = Path(url.toLocalFile())
+                if ruta.is_dir():
+                    return ruta
+        return None
+
+    def dragEnterEvent(self, event):
+        """Acepta el arrastre solo si trae una carpeta local"""
+        if self._carpeta_arrastrada(event) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        """Abre como proyecto la carpeta soltada sobre la ventana"""
+        carpeta = self._carpeta_arrastrada(event)
+        if carpeta is not None:
+            self.panel.abrir_carpeta(carpeta)
+            event.acceptProposedAction()
 
     def _crear_footer(self) -> QFrame:
         """Crea el footer con información"""
@@ -74,7 +102,7 @@ class VentanaPrincipal(QMainWindow):
         lbl_autor = QLabel("Desarrollado por <b>Leandro Guzmán</b> | Pucha Soft")
         lbl_autor.setStyleSheet("color: #5A5A7A; font-size: 11px;")
 
-        lbl_ver = QLabel("v1.5.0")
+        lbl_ver = QLabel("v1.9.0")
         lbl_ver.setStyleSheet("color: #4A9FFF; font-size: 11px; font-weight: 600;")
 
         fl.addWidget(lbl_autor)
@@ -129,19 +157,14 @@ class VentanaPrincipal(QMainWindow):
 
     def _abrir_reciente(self, ruta: str):
         """Abre un proyecto reciente"""
-        self.panel.ruta = Path(ruta)
-        self.panel.lbl_ruta.setText(ruta)
-
-        for btn in [self.panel.btn_esc, self.panel.btn_opc,
-                    self.panel.btn_dep, self.panel.btn_nvo]:
-            btn.setEnabled(True)
+        self.panel.abrir_carpeta(Path(ruta))
 
     def _mostrar_acerca_de(self):
         """Muestra el diálogo Acerca de"""
         QMessageBox.about(
             self,
             "Acerca de",
-            "<h2>ContextPack v1.5.0 </h2>"
+            "<h2>ContextPack v1.9.0 </h2>"
             "<p><b>Desarrollado por:</b> Leandro Guzmán<br>"        
             "<p>Generador de contexto para IA</p>"
             "<hr><p><i>© 2026 Pucha Soft</i></p>"

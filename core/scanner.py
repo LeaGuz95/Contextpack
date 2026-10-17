@@ -4,6 +4,7 @@ Escaneo de proyectos y filtrado de archivos
 import os
 import fnmatch
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Callable, Set
 
@@ -11,6 +12,24 @@ from models.data_models import InfoArchivo, ResultadoEscaneo
 from .dependencies import AnalizadorDependencias
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OpcionesFiltro:
+    """Filtros aplicados durante el escaneo"""
+    excluir_tests: bool = False
+    excluir_minificados: bool = True
+    tamano_max_kb: int = 1024   # 0 = sin límite
+
+
+# Nombres que delatan un archivo de test (test_foo.py, foo.test.ts, foo-spec.js…)
+_TOKENS_TEST = {'test', 'tests', 'spec', 'specs'}
+
+
+def _es_archivo_test(nombre: str) -> bool:
+    """Detecta archivos de test por los tokens del nombre (sin falsos positivos)"""
+    partes = nombre.lower().replace('-', '.').replace('_', '.').split('.')
+    return any(parte in _TOKENS_TEST for parte in partes)
 
 
 class LectorGitignore:
@@ -100,7 +119,8 @@ class FiltroArchivos:
 
     IGNORADAS = {
         '.git', 'node_modules', '__pycache__', 'bin', 'obj',
-        'dist', 'build', 'venv', '.venv', 'env'
+        'dist', 'build', 'venv', '.venv', 'env',
+        'release', 'out', 'target', 'coverage'
     }
 
     EXTENSIONES = {
@@ -121,13 +141,23 @@ class FiltroArchivos:
         'Pipfile.lock', 'composer.lock'
     }
 
-    def __init__(self, gitignore: Optional[LectorGitignore] = None):
+    CARPETAS_TEST = {'test', 'tests', 'spec', 'specs', '__tests__', '__test__'}
+
+    def __init__(
+        self,
+        gitignore: Optional[LectorGitignore] = None,
+        opciones: Optional[OpcionesFiltro] = None
+    ):
         self.gitignore = gitignore
+        self.opciones = opciones or OpcionesFiltro()
 
     def debe_ignorar_carpeta(self, nombre: str, ruta_relativa: str = '') -> bool:
         """Determina si una carpeta debe ser ignorada"""
         # Reglas hardcodeadas
         if nombre in self.IGNORADAS or nombre.startswith('.'):
+            return True
+
+        if self.opciones.excluir_tests and nombre.lower() in self.CARPETAS_TEST:
             return True
 
         # Reglas del .gitignore
@@ -148,6 +178,13 @@ class FiltroArchivos:
         if nombre in self.IGNORAR_COMPLETAMENTE:
             return False
 
+        # Los minificados no aportan nada al contexto y pueden ser enormes
+        if self.opciones.excluir_minificados and '.min.' in nombre:
+            return False
+
+        if self.opciones.excluir_tests and _es_archivo_test(ruta.name):
+            return False
+
         # Verificar .gitignore antes de incluir
         if self.gitignore and self.gitignore.activo:
             rel = ruta_relativa or ruta.name
@@ -157,14 +194,25 @@ class FiltroArchivos:
         if nombre in self.ARCHIVOS_ENV:
             return True
 
-        return ruta.suffix.lower() in self.EXTENSIONES
+        if ruta.suffix.lower() not in self.EXTENSIONES:
+            return False
+
+        if self.opciones.tamano_max_kb:
+            try:
+                if ruta.stat().st_size > self.opciones.tamano_max_kb * 1024:
+                    return False
+            except OSError:
+                pass
+
+        return True
 
 
 class EscanerProyecto:
     """Escanea proyectos y genera resultados"""
 
-    def __init__(self):
-        self.filtro = FiltroArchivos()
+    def __init__(self, opciones_filtro: Optional[OpcionesFiltro] = None):
+        self.opciones_filtro = opciones_filtro or OpcionesFiltro()
+        self.filtro = FiltroArchivos(opciones=self.opciones_filtro)
         self.gitignore: Optional[LectorGitignore] = None
 
     def escanear(
@@ -190,7 +238,7 @@ class EscanerProyecto:
         """
         # Cargar .gitignore si existe
         self.gitignore = LectorGitignore(raiz)
-        self.filtro = FiltroArchivos(self.gitignore)
+        self.filtro = FiltroArchivos(self.gitignore, self.opciones_filtro)
 
         if dep_archivo:
             return self._escanear_dependencias(

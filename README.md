@@ -4,7 +4,7 @@ App de escritorio (PySide6) que recorre un proyecto y arma un archivo de context
 pasarle a un modelo de IA: árbol de directorios más el contenido de los archivos, con los
 valores sensibles reemplazados por `[REDACTADO]`.
 
-**v1.5.0** | PySide6 | Leandro Guzmán, Pucha Soft
+**v1.9.0** | PySide6 | Leandro Guzmán, Pucha Soft
 
 ---
 
@@ -43,18 +43,20 @@ python main.py
 2. **Escanear**: recorre los archivos y arma el contexto. La barra de progreso muestra
    cuántos archivos lleva y cuál está procesando.
 3. Revisás el resultado: árbol a la izquierda, métricas a la derecha, vista previa abajo.
+   Con los checkboxes del árbol ajustás qué archivos entran.
 4. **Copiar** o **Exportar**.
 
 Los botones se activan solos a medida que corresponde: al arrancar solo funciona
-`Seleccionar`; después de elegir carpeta se habilitan `Opciones`, `Analizar`, `Escanear` y
-`Nuevo`; recién cuando termina un escaneo se habilitan `Copiar` y `Exportar`.
+`Seleccionar`; después de elegir carpeta se habilitan `Opciones`, `Analizar`, `Escanear`,
+`Nuevo` y `Cargar perfil`; recién cuando termina un escaneo se habilitan `Copiar`,
+`Exportar` y las acciones sobre la selección.
 
 ### Los botones
 
 | Botón | Qué hace |
 |---|---|
 | `Seleccionar` | Abre el selector de carpeta. Recuerda la última usada. |
-| `⚙️ Opciones` | Lista las carpetas de primer nivel del proyecto con checkboxes para incluir o excluir. Al confirmar, escanea directo. |
+| `⚙️ Opciones` | Lista las carpetas de primer nivel del proyecto y los filtros de escaneo. Al confirmar, escanea directo. |
 | `🔍 Analizar` | Abre el árbol de archivos y escanea solo los relacionados con el que elijas, siguiendo imports. |
 | `Escanear` | Escaneo completo. Mientras corre se convierte en `⏹ Cancelar`. |
 | `🔄 Nuevo` | Limpia todo para empezar con otro proyecto (pide confirmación). |
@@ -66,6 +68,96 @@ cancelar queda un mensaje de "Escaneo cancelado" por 2 segundos y la interfaz se
 
 El escaneo corre en un hilo aparte (`core/scanner_thread.py`), así que la ventana no se
 congela aunque el proyecto sea grande.
+
+### Editar la selección
+
+Después de un escaneo, cada archivo y carpeta del árbol tiene un checkbox. Desmarcar un
+archivo lo saca del contexto (queda tachado) y los totales de tokens se actualizan al
+instante; desmarcar una carpeta saca todo su contenido. Las carpetas muestran un estado
+parcial cuando solo una parte de su contenido está seleccionada.
+
+| Botón | Qué hace |
+|---|---|
+| `☑ Todos` | Vuelve a incluir todo lo escaneado. |
+| `⬜ Ninguno` | Excluye todo (útil para elegir a mano unos pocos archivos). |
+| `✂️ Recortar…` | Pide un objetivo de tokens y quita los archivos más pesados hasta entrar en ese límite. |
+| `📌 Guardar perfil` | Guarda cómo está configurado el proyecto (ver abajo). |
+| `↺ Cargar perfil` | Vuelve a dejar todo como estaba al guardar. |
+
+El recorte arranca proponiendo el límite del modelo objetivo elegido (o el 90% del total si
+el modelo es `Personalizado`). Al terminar avisa cuántos archivos quitó, cuántos tokens
+ahorró y cuántos quedan.
+
+La selección vive en la sesión: al volver a escanear se restablece. Para conservarla entre
+sesiones está el perfil.
+
+### Perfiles por proyecto
+
+`📌 Guardar perfil` recuerda **todo** lo que configura al proyecto de una sola vez: las
+carpetas elegidas en `⚙️ Opciones`, los filtros de escaneo, los tres toggles de optimización,
+el modelo objetivo, la plantilla y la selección de archivos. Se guardan hasta 20 proyectos.
+
+`↺ Cargar perfil` los aplica de vuelta. Si el perfil pide otro escaneo del que tenés en
+pantalla —otras carpetas u otros filtros— escanea de nuevo y aplica la selección al terminar;
+si coincide con el escaneo actual, cambia la selección al instante.
+
+El botón `↺ Cargar perfil` se habilita apenas elegís la carpeta, antes de escanear: es
+justamente para abrir un proyecto y dejarlo como lo tenías sin tener que acordarte de nada.
+
+### Plantillas de contexto
+
+Debajo del modelo objetivo hay un selector de plantilla: el texto que se manda **antes** del
+contexto, con lo que le pedís a la IA que haga. Viene con cinco:
+
+| Plantilla | Pide |
+|---|---|
+| `Explicar el proyecto` | Arquitectura, módulos, flujo principal y decisiones de diseño. |
+| `Refactor y mejoras` | Duplicación, funciones largas, acoplamiento y deuda técnica. |
+| `Buscar bugs` | Bugs reales, con archivo, causa y arreglo. |
+| `Escribir tests` | Tests con casos borde y el framework asumido. |
+| `Documentar` | README, módulos y ejemplos de uso. |
+
+`✏️` abre el editor de la plantilla personalizada; al guardar, el selector queda en
+`Personalizada`. La plantilla cuenta en los tokens —se ve en la vista previa y en el total— y
+viaja dentro del perfil del proyecto.
+
+En texto plano va como bloque `===== INSTRUCCIONES =====`; en Markdown, como `# INSTRUCCIONES`
+antes de `# CONTEXTO DEL PROYECTO`.
+
+### Optimizar el contenido
+
+Arriba del panel de métricas hay dos toggles que se aplican al vuelo —no hace falta volver a
+escanear— y quedan guardados en `config.json`:
+
+| Toggle | Qué hace |
+|---|---|
+| `Sin comentarios` | Quita los comentarios. En `.py` usa el tokenizador de Python; en JS/TS, C#, Java, Go, PHP, Rust y CSS respeta strings y template literals; en `.yaml`, `.toml`, `.ini`, `.env`, `.sh` y `.rb` solo borra las líneas que son comentario entero, para no romper valores que contengan `#`. |
+| `Sin líneas vacías` | Saca las líneas en blanco. |
+
+Nada de esto toca `.md`, `.txt`, `.json` ni `.html`.
+
+Medido sobre 8 proyectos reales, quitar comentarios y líneas vacías bajó los tokens entre 2% y
+17% según cuánto esté comentado el código. El contenido nunca se recorta a medias: si un
+archivo no se puede procesar (por ejemplo, un `.py` que no parsea), se deja tal cual.
+
+### Filtros de escaneo
+
+`⚙️ Opciones` trae, además de las carpetas, los filtros que se aplican durante el escaneo:
+
+| Filtro | Por defecto | Qué hace |
+|---|---|---|
+| Excluir minificados | Sí | Descarta `*.min.js`, `*.min.css` y similares. |
+| Omitir archivos mayores a | 1 MB | Descarta archivos gigantes (bundles, volcados, reportes). |
+| Excluir tests y specs | No | Descarta `test_*`, `*_test.py`, `*.spec.ts`, `*.test.js` y las carpetas `test/`, `tests/`, `__tests__/`, `spec/`, `specs/`. |
+
+El límite de tamaño existe por un caso concreto: en un proyecto real, un único
+`release/win-unpacked/LICENSES.chromium.html` de 19,5 MB aportaba 4,13 millones de tokens, el
+99% del contexto. Con los valores por defecto ese proyecto pasó de 4.182.452 a 43.149 tokens.
+
+### Arrastrar una carpeta
+
+Podés soltar una carpeta del explorador de Windows directamente sobre la ventana: queda como
+proyecto activo, igual que con `Seleccionar`.
 
 ### Buscar en la vista previa
 
@@ -100,7 +192,8 @@ aparte, sencillamente no están en la lista.
 ### Carpetas que se ignoran siempre
 
 ```
-.git  .venv  __pycache__  bin  build  dist  env  node_modules  obj  venv
+.git  .venv  __pycache__  bin  build  coverage  dist  env
+node_modules  obj  out  release  target  venv
 ```
 
 Además **toda carpeta cuyo nombre arranque con punto** queda fuera, así que `.github`,
@@ -197,6 +290,12 @@ guardada en `config.json`.
 
 El árbol de archivos tiene tres columnas — **Archivos**, **Tamaño** y **Tokens** — y las
 carpetas muestran el total acumulado de su rama, así se ve de un vistazo qué pesa más.
+Cuando hay archivos excluidos, `Archivos` muestra `seleccionados / totales`, y las carpetas
+solo suman lo que está seleccionado.
+
+Los toggles de optimización mueven el total de tokens al instante: el conteo siempre refleja lo
+que se va a copiar o exportar. `Líneas`, en cambio, es lo que se escaneó, sin descontar la
+optimización.
 
 ---
 
@@ -214,6 +313,20 @@ diálogo te deja cambiar la extensión:
 ---
 
 ## Formato de salida
+
+Si elegiste una plantilla, arriba de todo va su bloque de instrucciones:
+
+````markdown
+# INSTRUCCIONES
+
+Actuá como desarrollador senior y explicame este proyecto.
+...
+
+---
+
+# CONTEXTO DEL PROYECTO
+...
+````
 
 Salida real de la app sobre un proyecto con `README.md`, `main.py` y `src/utils.py`, donde
 `main.py` tenía una API key:
@@ -364,7 +477,19 @@ Claves de `config.json`:
 | `proyectos_recientes` | Últimos 10 proyectos, del más reciente al más viejo |
 | `mostrar_advertencia_seguridad` | Si Exportar pide marcar "He verificado" |
 | `modelo_objetivo` | Modelo elegido en el selector de ventana de contexto |
+| `perfiles` | Perfiles guardados con `📌 Guardar perfil`, por proyecto (máx. 20) |
+| `plantilla_nombre` | Plantilla elegida en el selector |
+| `plantilla_personalizada` | Texto de la plantilla `Personalizada` |
+| `quitar_comentarios` | Toggle `Sin comentarios` |
+| `quitar_lineas_vacias` | Toggle `Sin líneas vacías` |
+| `excluir_tests` | Filtro `Excluir tests y specs` |
+| `excluir_minificados` | Filtro `Excluir minificados` (por defecto `true`) |
+| `tamano_max_kb` | Tamaño máximo por archivo en KB (por defecto `1024`, `0` = sin límite) |
 | `ventana_ancho` / `ventana_alto` | Tamaño de la ventana, guardado al cerrar |
+
+Un `config.json` viejo puede traer claves que ya no se usan (`carpetas_ignoradas_custom`,
+`selecciones`): no se borran nunca, y si no hay perfil la `selecciones` de la v1.6.0 se usa
+como respaldo de la selección de archivos.
 
 ---
 
@@ -379,19 +504,21 @@ ContextPack/
 ├── README.md
 ├── core/
 │   ├── config.py                 # ConfigManager: preferencias y recientes
-│   ├── scanner.py                # EscanerProyecto, FiltroArchivos, LectorGitignore
+│   ├── scanner.py                # EscanerProyecto, FiltroArchivos, OpcionesFiltro
 │   ├── scanner_thread.py         # Hilo de escaneo no bloqueante
 │   ├── dependencies.py           # AnalizadorDependencias: imports y resolución
+│   ├── optimizer.py              # Optimizador: comentarios y líneas vacías
 │   ├── redactor.py               # RedactorSensible: API keys, contraseñas, URLs de BD
 │   ├── context.py                # ConstructorContexto: salida TXT y Markdown
 │   └── tokenizer.py              # Tokenizador: conteo real (tiktoken) o estimado
 ├── models/
 │   └── data_models.py            # InfoArchivo, ResultadoEscaneo
 └── ui/
-    ├── main_window.py            # VentanaPrincipal, menú, footer
+    ├── main_window.py            # VentanaPrincipal, menú, footer, drag & drop
     ├── main_panel.py             # VistaPanel: controles, árbol, métricas, búsqueda
-    ├── dialogs.py                # Selección de carpetas y de archivo a analizar
-    ├── model_view.py             # ModeloVista: cachea el contexto entre vistas
+    ├── dialogs.py                # Carpetas y filtros, archivo a analizar, plantilla
+    ├── plantillas.py             # Plantillas de instrucciones para la IA
+    ├── model_view.py             # ModeloVista: selección, recorte y caché del contexto
     └── theme.py                  # Hoja de estilos
 ```
 

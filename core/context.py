@@ -2,8 +2,9 @@
 Construcción del contexto para IA
 """
 import logging
-from typing import Dict
+from typing import Dict, Optional
 from models.data_models import ResultadoEscaneo
+from .optimizer import OpcionesOptimizacion, Optimizador
 from .redactor import RedactorSensible
 from .tokenizer import obtener_tokenizador
 
@@ -23,9 +24,20 @@ class ConstructorContexto:
         '.md': 'markdown', '.txt': 'text',
     }
 
-    def __init__(self):
+    def __init__(self, opciones: Optional[OpcionesOptimizacion] = None):
         self.redactor = RedactorSensible()
         self.tokenizador = obtener_tokenizador()
+        self.optimizador = Optimizador()
+        self.opciones = opciones or OpcionesOptimizacion()
+        self.plantilla = ""
+
+    def establecer_opciones(self, opciones: OpcionesOptimizacion):
+        """Cambia las optimizaciones aplicadas al leer cada archivo"""
+        self.opciones = opciones
+
+    def establecer_plantilla(self, texto: str):
+        """Cambia las instrucciones que se anteponen al contexto"""
+        self.plantilla = (texto or "").strip()
 
     def construir(self, resultado: ResultadoEscaneo) -> str:
         """
@@ -39,7 +51,16 @@ class ConstructorContexto:
         """
         total_redacciones = 0
 
-        lineas = [
+        lineas = []
+
+        if self.plantilla:
+            lineas.extend([
+                "===== INSTRUCCIONES =====",
+                self.plantilla,
+                ""
+            ])
+
+        lineas.extend([
             "===== CONTEXTO DEL PROYECTO =====",
             f"RAÍZ: {resultado.ruta_raiz}",
             f"TOTAL_ARCHIVOS: {len(resultado.archivos)}",
@@ -48,11 +69,11 @@ class ConstructorContexto:
             "===== ÁRBOL DE DIRECTORIOS =====",
             self._formatear_arbol(resultado.arbol_directorios),
             ""
-        ]
+        ])
 
         # Agregar contenido de archivos
         for info in sorted(resultado.archivos, key=lambda f: f.ruta_relativa):
-            lineas.append(f"===== ARCHIVO: {info.ruta_relativa} =====")
+            lineas.append(self.cabecera_txt(info))
 
             contenido_final, n = self._contenido_archivo(info)
             total_redacciones += n
@@ -82,7 +103,19 @@ class ConstructorContexto:
         """
         total_redacciones = 0
 
-        lineas = [
+        lineas = []
+
+        if self.plantilla:
+            lineas.extend([
+                "# INSTRUCCIONES",
+                "",
+                self.plantilla,
+                "",
+                "---",
+                ""
+            ])
+
+        lineas.extend([
             "# CONTEXTO DEL PROYECTO",
             "",
             f"**RAÍZ:** `{resultado.ruta_raiz}`",
@@ -95,7 +128,7 @@ class ConstructorContexto:
             self._formatear_arbol(resultado.arbol_directorios),
             "```",
             ""
-        ]
+        ])
 
         # Agregar contenido de archivos
         for info in sorted(resultado.archivos, key=lambda f: f.ruta_relativa):
@@ -129,13 +162,18 @@ class ConstructorContexto:
 
         return "\n".join(lineas)
 
+    def cabecera_txt(self, info) -> str:
+        """Cabecera que precede a un archivo en el contexto de texto plano"""
+        return f"===== ARCHIVO: {info.ruta_relativa} ====="
+
     def _contenido_archivo(self, info) -> tuple:
-        """Lee, redacta y tokeniza el contenido de un archivo"""
+        """Lee, optimiza y redacta el contenido de un archivo"""
         try:
             contenido = info.ruta.read_text(encoding='utf-8', errors='ignore')
+            contenido = self.optimizador.optimizar(info.ruta, contenido, self.opciones)
             contenido_final, n = self.redactor.redactar(info.ruta, contenido)
         except Exception:
-            logger.debug('No se pudo leer %s', info.ruta, exc_info=True)
+            logger.debug('No se pudo procesar %s', info.ruta, exc_info=True)
             info.token_count = 0
             return "[Error al leer archivo]", 0
 

@@ -1,5 +1,6 @@
 from .config import ConfigManager
-from .scanner import EscanerProyecto, FiltroArchivos
+from .optimizer import OpcionesOptimizacion, Optimizador
+from .scanner import EscanerProyecto, FiltroArchivos, OpcionesFiltro
 from .dependencies import AnalizadorDependencias
 from .context import ConstructorContexto
 from .redactor import RedactorSensible
@@ -8,8 +9,11 @@ from .tokenizer import Tokenizador, obtener_tokenizador
 
 __all__ = [
     'ConfigManager',
+    'OpcionesOptimizacion',
+    'Optimizador',
     'EscanerProyecto',
     'FiltroArchivos',
+    'OpcionesFiltro',
     'AnalizadorDependencias',
     'ConstructorContexto',
     'RedactorSensible',

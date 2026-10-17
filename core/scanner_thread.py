@@ -6,7 +6,7 @@ from typing import Optional, List
 
 from PySide6.QtCore import QThread, Signal
 
-from .scanner import EscanerProyecto
+from .scanner import EscanerProyecto, OpcionesFiltro
 from .tokenizer import obtener_tokenizador
 from models.data_models import ResultadoEscaneo
 
@@ -30,13 +30,14 @@ class HiloEscaneo(QThread):
         raiz: Path,
         carpetas: Optional[List[str]] = None,
         dep_archivo: Optional[Path] = None,
+        opciones_filtro: Optional[OpcionesFiltro] = None,
         parent=None
     ):
         super().__init__(parent)
         self.raiz       = raiz
         self.carpetas   = carpetas
         self.dep_archivo = dep_archivo
-        self._escaner   = EscanerProyecto()
+        self._escaner   = EscanerProyecto(opciones_filtro)
 
     def run(self):
         """Ejecuta el escaneo en el thread secundario"""
