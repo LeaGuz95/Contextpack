@@ -6,17 +6,26 @@ valores sensibles reemplazados por `[REDACTADO]`.
 
 **v1.9.0** | PySide6 | Leandro Guzmán, Pucha Soft
 
+Repositorio: https://github.com/LeaGuz95/Contextpack
+
 ---
 
 ## Instalar y ejecutar
 
 ### Opción 1: el ejecutable
 
-`dist/ContextPack.exe` no necesita Python instalado. Doble clic y listo.
+Descargá `ContextPack.exe` desde la página de
+[releases](https://github.com/LeaGuz95/Contextpack/releases/latest). No necesita Python
+instalado: doble clic y listo.
 
 ### Opción 2: desde el código
 
-Necesitás Python 3.9 o superior (PySide6 6.10 exige `>=3.9,<3.15`).
+Necesitás Python 3.9 o superior.
+
+```bash
+git clone https://github.com/LeaGuz95/Contextpack.git
+cd Contextpack
+```
 
 ```bash
 # Windows
@@ -94,7 +103,7 @@ sesiones está el perfil.
 ### Perfiles por proyecto
 
 `📌 Guardar perfil` recuerda **todo** lo que configura al proyecto de una sola vez: las
-carpetas elegidas en `⚙️ Opciones`, los filtros de escaneo, los tres toggles de optimización,
+carpetas elegidas en `⚙️ Opciones`, los filtros de escaneo, los dos toggles de optimización,
 el modelo objetivo, la plantilla y la selección de archivos. Se guardan hasta 20 proyectos.
 
 `↺ Cargar perfil` los aplica de vuelta. Si el perfil pide otro escaneo del que tenés en
@@ -107,7 +116,7 @@ justamente para abrir un proyecto y dejarlo como lo tenías sin tener que acorda
 ### Plantillas de contexto
 
 Debajo del modelo objetivo hay un selector de plantilla: el texto que se manda **antes** del
-contexto, con lo que le pedís a la IA que haga. Viene con cinco:
+contexto, con lo que le pedís a la IA que haga. Arranca en `Sin plantilla` y trae cinco:
 
 | Plantilla | Pide |
 |---|---|
@@ -117,7 +126,7 @@ contexto, con lo que le pedís a la IA que haga. Viene con cinco:
 | `Escribir tests` | Tests con casos borde y el framework asumido. |
 | `Documentar` | README, módulos y ejemplos de uso. |
 
-`✏️` abre el editor de la plantilla personalizada; al guardar, el selector queda en
+`✏️` abre el editor de la plantilla `Personalizada`; al guardar, el selector queda en
 `Personalizada`. La plantilla cuenta en los tokens —se ve en la vista previa y en el total— y
 viaja dentro del perfil del proyecto.
 
@@ -131,10 +140,11 @@ escanear— y quedan guardados en `config.json`:
 
 | Toggle | Qué hace |
 |---|---|
-| `Sin comentarios` | Quita los comentarios. En `.py` usa el tokenizador de Python; en JS/TS, C#, Java, Go, PHP, Rust y CSS respeta strings y template literals; en `.yaml`, `.toml`, `.ini`, `.env`, `.sh` y `.rb` solo borra las líneas que son comentario entero, para no romper valores que contengan `#`. |
-| `Sin líneas vacías` | Saca las líneas en blanco. |
+| `Sin comentarios` | Quita los comentarios en los lenguajes conocidos. En `.py` usa el tokenizador de Python; en los de estilo C (`.js`, `.jsx`, `.ts`, `.tsx`, `.java`, `.cs`, `.go`, `.php`, `.c`, `.cpp`, `.h`, `.rs`, `.css`, `.scss`) respeta strings y template literals; en los de comentario de línea (`.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.env`, `.sh`, `.bash`, `.ps1`, `.rb`) borra solo las líneas que son comentario entero, para no romper valores que contengan `#`. |
+| `Sin líneas vacías` | Saca las líneas en blanco. Se aplica a todos los archivos. |
 
-Nada de esto toca `.md`, `.txt`, `.json` ni `.html`.
+`Sin comentarios` no toca `.md`, `.txt`, `.json` ni `.html`: no tiene un estilo de comentario
+para ellos, así que los deja tal cual.
 
 Medido sobre 8 proyectos reales, quitar comentarios y líneas vacías bajó los tokens entre 2% y
 17% según cuánto esté comentado el código. El contenido nunca se recorta a medias: si un
@@ -148,7 +158,7 @@ archivo no se puede procesar (por ejemplo, un `.py` que no parsea), se deja tal 
 |---|---|---|
 | Excluir minificados | Sí | Descarta `*.min.js`, `*.min.css` y similares. |
 | Omitir archivos mayores a | 1 MB | Descarta archivos gigantes (bundles, volcados, reportes). |
-| Excluir tests y specs | No | Descarta `test_*`, `*_test.py`, `*.spec.ts`, `*.test.js` y las carpetas `test/`, `tests/`, `__tests__/`, `spec/`, `specs/`. |
+| Excluir tests y specs | No | Descarta `test_*`, `*_test.py`, `*.spec.ts`, `*.test.js` y las carpetas `test/`, `tests/`, `__tests__/`, `__test__/`, `spec/`, `specs/`. |
 
 El límite de tamaño existe por un caso concreto: en un proyecto real, un único
 `release/win-unpacked/LICENSES.chromium.html` de 19,5 MB aportaba 4,13 millones de tokens, el
@@ -161,7 +171,7 @@ proyecto activo, igual que con `Seleccionar`.
 
 ### Buscar en la vista previa
 
-La barra de búsqueda filtra dentro del texto generado. `Enter` o `▼` vai al siguiente
+La barra de búsqueda filtra dentro del texto generado. `Enter` o `▼` va al siguiente
 resultado, `▲` al anterior. Cuando no hay más coincidencias vuelve al principio o al final
 del documento, según el sentido.
 
@@ -171,6 +181,7 @@ del documento, según el sentido.
   completa la ruta, hay que volver a pulsar `Escanear`. Las entradas que apuntan a carpetas
   que ya no existen se ocultan solas.
 - **Archivo → Limpiar Historial**: vacía la lista de recientes.
+- **Archivo → Salir**: cierra la app (guarda tamaño de ventana).
 - **Ayuda → Acerca de**: versión y autoría.
 
 ---
@@ -502,7 +513,10 @@ ContextPack/
 ├── requirements.txt
 ├── logo.ico
 ├── README.md
+├── .gitattributes                # Normalización de finales de línea
+├── .gitignore
 ├── core/
+│   ├── __init__.py               # API pública del paquete
 │   ├── config.py                 # ConfigManager: preferencias y recientes
 │   ├── scanner.py                # EscanerProyecto, FiltroArchivos, OpcionesFiltro
 │   ├── scanner_thread.py         # Hilo de escaneo no bloqueante
@@ -512,8 +526,10 @@ ContextPack/
 │   ├── context.py                # ConstructorContexto: salida TXT y Markdown
 │   └── tokenizer.py              # Tokenizador: conteo real (tiktoken) o estimado
 ├── models/
+│   ├── __init__.py
 │   └── data_models.py            # InfoArchivo, ResultadoEscaneo
 └── ui/
+    ├── __init__.py               # API pública del paquete
     ├── main_window.py            # VentanaPrincipal, menú, footer, drag & drop
     ├── main_panel.py             # VistaPanel: controles, árbol, métricas, búsqueda
     ├── dialogs.py                # Carpetas y filtros, archivo a analizar, plantilla

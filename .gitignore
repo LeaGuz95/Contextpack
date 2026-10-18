@@ -48,6 +48,9 @@ CONTEXT*.md
 context_pack*.md
 context_pack*.txt
 
+# Documentos de trabajo (no forman parte del proyecto)
+Plan de mejora*.md
+
 # Secrets y config local
 .env
 .env.*
