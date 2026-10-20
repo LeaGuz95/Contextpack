@@ -1,5 +1,5 @@
 """
-ContextPack v1.9.0 - Generador de Contexto para IA
+ContextPack v1.10.1 - Generador de Contexto para IA
 
 Punto de entrada de la aplicación
 
@@ -16,7 +16,7 @@ from core import ConfigManager
 from ui import VentanaPrincipal
 from ui.theme import STYLESHEET
 
-VERSION = "v1.9.0"
+VERSION = "v1.10.1"
 
 
 def _configurar_logging():

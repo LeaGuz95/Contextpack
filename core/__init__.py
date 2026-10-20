@@ -1,6 +1,11 @@
 from .config import ConfigManager
 from .optimizer import OpcionesOptimizacion, Optimizador
-from .scanner import EscanerProyecto, FiltroArchivos, OpcionesFiltro
+from .scanner import (
+    EscanerProyecto, FiltroArchivos, LectorGitignore, OpcionesFiltro,
+    MOTIVO_CARPETA_OCULTA, MOTIVO_CARPETA_RESERVADA, MOTIVO_CARPETA_TESTS,
+    MOTIVO_EXTENSION, MOTIVO_GITIGNORE, MOTIVO_LECTURA, MOTIVO_LISTA_NEGRA,
+    MOTIVO_MINIFICADO, MOTIVO_TAMANO, MOTIVO_TESTS,
+)
 from .dependencies import AnalizadorDependencias
 from .context import ConstructorContexto
 from .redactor import RedactorSensible
@@ -13,7 +18,18 @@ __all__ = [
     'Optimizador',
     'EscanerProyecto',
     'FiltroArchivos',
+    'LectorGitignore',
     'OpcionesFiltro',
+    'MOTIVO_CARPETA_OCULTA',
+    'MOTIVO_CARPETA_RESERVADA',
+    'MOTIVO_CARPETA_TESTS',
+    'MOTIVO_EXTENSION',
+    'MOTIVO_GITIGNORE',
+    'MOTIVO_LECTURA',
+    'MOTIVO_LISTA_NEGRA',
+    'MOTIVO_MINIFICADO',
+    'MOTIVO_TAMANO',
+    'MOTIVO_TESTS',
     'AnalizadorDependencias',
     'ConstructorContexto',
     'RedactorSensible',

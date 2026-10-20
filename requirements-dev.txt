@@ -1,0 +1,2 @@
+# Dependencias solo para desarrollo y tests (no van al ejecutable)
+pytest>=8.0

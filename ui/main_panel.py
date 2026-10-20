@@ -11,12 +11,15 @@ from PySide6.QtWidgets import (
     QLabel, QSplitter, QMessageBox, QLineEdit, QApplication,
     QProgressBar, QComboBox, QHeaderView, QInputDialog, QCheckBox
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QTextCursor
 
 from core import ConfigManager, HiloEscaneo, OpcionesFiltro, OpcionesOptimizacion
 from .model_view import ModeloVista, clave_ruta
-from .dialogs import DialogoSelectorCarpetas, DialogoAnalizarDep, DialogoPlantilla
+from .dialogs import (
+    DialogoSelectorCarpetas, DialogoAnalizarDep, DialogoPlantilla,
+    DialogoIgnorados,
+)
 from .plantillas import PLANTILLAS, PERSONALIZADA, SIN_PLANTILLA, texto_plantilla
 
 
@@ -29,6 +32,17 @@ MODELOS_OBJETIVO = [
     ("Grok (128k)", 128000),
     ("Gemini 1.5 Pro (1M)", 1000000),
 ]
+
+
+class _EtiquetaClickeable(QLabel):
+    """QLabel que emite `clicked` al soltar el botón izquierdo"""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, evento):
+        if evento.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(evento)
 
 
 class VistaPanel(QWidget):
@@ -46,6 +60,8 @@ class VistaPanel(QWidget):
         self._carpetas_usadas = None   # lo que realmente cubre el escaneo actual
         self._filtro_usado = None
         self._seleccion_pendiente = None   # exclusión a aplicar al terminar
+        self._escaneo_pendiente = None     # pedido a retomar al cancelar
+        self._cancelado = False            # el último escaneo lo cortó el usuario
         self._cargando_perfil = False      # evita refrescos intermedios
         self._tokens_actuales = 0
         self._mapa_archivos = {}
@@ -86,7 +102,7 @@ class VistaPanel(QWidget):
 
         self.btn_esc = QPushButton("Escanear")
         # `clicked` emite un bool que si no se descarta cae en `carpetas`
-        self.btn_esc.clicked.connect(lambda *_: self._escanear())
+        self.btn_esc.clicked.connect(lambda *_: self._on_btn_escanear())
         self.btn_esc.setEnabled(False)
 
         self.btn_nvo = QPushButton("🔄 Nuevo")
@@ -271,7 +287,10 @@ class VistaPanel(QWidget):
 
         ml.addSpacing(10)
         self.lbl_files  = QLabel("Archivos: 0")
-        self.lbl_ign    = QLabel("Ignorados: 0")
+        self.lbl_ign    = _EtiquetaClickeable("Ignorados: 0")
+        self.lbl_ign.setCursor(Qt.PointingHandCursor)
+        self.lbl_ign.setEnabled(False)
+        self.lbl_ign.clicked.connect(self._mostrar_ignorados)
         self.lbl_lines  = QLabel("Líneas: 0")
         self.lbl_tokens = QLabel("Tokens: 0")
         self.lbl_rec    = QLabel("")
@@ -297,8 +316,7 @@ class VistaPanel(QWidget):
 
     def _on_modelo_cambiado(self):
         """Persiste el modelo objetivo y recalcula la recomendación"""
-        self.config.config['modelo_objetivo'] = self.cmb_modelo.currentText()
-        self.config.guardar()
+        self.config.establecer(modelo_objetivo=self.cmb_modelo.currentText())
         self._actualizar_recomendacion()
 
     def _restaurar_plantilla(self):
@@ -316,8 +334,7 @@ class VistaPanel(QWidget):
 
     def _on_plantilla_cambiada(self):
         """Aplica la plantilla elegida al constructor de contexto"""
-        self.config.config['plantilla_nombre'] = self.cmb_plantilla.currentText()
-        self.config.guardar()
+        self.config.establecer(plantilla_nombre=self.cmb_plantilla.currentText())
 
         self.modelo.establecer_plantilla(self._texto_plantilla())
         if not self._cargando_perfil and self.modelo.resultado:
@@ -330,7 +347,7 @@ class VistaPanel(QWidget):
         if not dlg.exec():
             return
 
-        self.config.config['plantilla_personalizada'] = dlg.texto()
+        self.config.establecer(plantilla_personalizada=dlg.texto())
         if self.cmb_plantilla.currentText() == PERSONALIZADA:
             self._on_plantilla_cambiada()
         else:
@@ -348,9 +365,10 @@ class VistaPanel(QWidget):
             quitar_comentarios=self.chk_comentarios.isChecked(),
             quitar_lineas_vacias=self.chk_vacias.isChecked(),
         )
-        self.config.config['quitar_comentarios'] = opciones.quitar_comentarios
-        self.config.config['quitar_lineas_vacias'] = opciones.quitar_lineas_vacias
-        self.config.guardar()
+        self.config.establecer(
+            quitar_comentarios=opciones.quitar_comentarios,
+            quitar_lineas_vacias=opciones.quitar_lineas_vacias,
+        )
 
         self.modelo.establecer_opciones_optimizacion(opciones)
         if not self._cargando_perfil and self.modelo.resultado:
@@ -378,8 +396,7 @@ class VistaPanel(QWidget):
         # Se puede restaurar un perfil antes de escanear: para eso sirve
         self.btn_cargar_perfil.setEnabled(True)
 
-        self.config.config['ultima_carpeta'] = str(self.ruta)
-        self.config.guardar()
+        self.config.establecer(ultima_carpeta=str(self.ruta))
 
     def _nuevo(self):
         """Reinicia para escanear otro proyecto"""
@@ -405,6 +422,7 @@ class VistaPanel(QWidget):
         for lbl in [self.lbl_files, self.lbl_ign, self.lbl_lines, self.lbl_tokens]:
             lbl.setText(lbl.text().split(':')[0] + ": 0")
             lbl.setToolTip("")
+        self.lbl_ign.setEnabled(False)
         self.lbl_rec.setText("")
 
         for btn in [self.btn_esc, self.btn_opc, self.btn_dep,
@@ -435,10 +453,11 @@ class VistaPanel(QWidget):
         dlg = DialogoSelectorCarpetas(self.ruta, self._opciones_filtro(), self)
         if dlg.exec():
             opciones = dlg.obtener_opciones()
-            self.config.config['excluir_tests'] = opciones.excluir_tests
-            self.config.config['excluir_minificados'] = opciones.excluir_minificados
-            self.config.config['tamano_max_kb'] = opciones.tamano_max_kb
-            self.config.guardar()
+            self.config.establecer(
+                excluir_tests=opciones.excluir_tests,
+                excluir_minificados=opciones.excluir_minificados,
+                tamano_max_kb=opciones.tamano_max_kb,
+            )
 
             self._escanear(carpetas=dlg.obtener_seleccionadas(), filtro=opciones)
 
@@ -447,17 +466,26 @@ class VistaPanel(QWidget):
         if not self.ruta or (self._hilo and self._hilo.isRunning()):
             return
 
-        dlg = DialogoAnalizarDep(self.ruta, self)
+        dlg = DialogoAnalizarDep(self.ruta, self._opciones_filtro(), self)
         if dlg.exec() and dlg.archivo:
             self._escanear(dep=dlg.archivo)
+
+    def _on_btn_escanear(self):
+        """El botón escanea, o cancela si ya hay un escaneo en curso"""
+        if self._hilo and self._hilo.isRunning():
+            self._cancelar_escaneo()
+            return
+        self._escanear()
 
     def _escanear(self, carpetas=None, dep=None, filtro=None):
         """Inicia el escaneo en background thread"""
         if not self.ruta:
             return
 
-        # Si hay un escaneo activo, cancelarlo
+        # Si hay un escaneo activo, se cancela y este pedido se retoma
+        # cuando el hilo anterior termine (ver _on_hilo_terminado).
         if self._hilo and self._hilo.isRunning():
+            self._escaneo_pendiente = (carpetas, dep, filtro)
             self._cancelar_escaneo()
             return
 
@@ -466,6 +494,8 @@ class VistaPanel(QWidget):
 
         # Sin carpetas elegidas vale None, no una lista vacía ni un bool
         carpetas = list(carpetas) if carpetas else None
+
+        self._cancelado = False
 
         self._carpetas_pendientes = carpetas
         self._dep_pendiente = dep
@@ -482,27 +512,76 @@ class VistaPanel(QWidget):
         self._hilo.progreso.connect(self._on_progreso)
         self._hilo.completado.connect(self._on_completado)
         self._hilo.error.connect(self._on_error)
-        self._hilo.finished.connect(lambda: self._ui_escaneando(False))
+        self._hilo.finished.connect(self._on_hilo_terminado)
         self._hilo.start()
 
     def _cancelar_escaneo(self):
-        """Solicita la cancelación del escaneo en curso"""
+        """
+        Pide la interrupción sin bloquear la interfaz.
+
+        La UI se restaura en _on_hilo_terminado, cuando el hilo confirma que
+        terminó. El botón queda deshabilitado mientras tanto.
+        """
         if self._hilo and self._hilo.isRunning():
             self._hilo.requestInterruption()
-            self._hilo.wait(3000)   # esperar máximo 3 segundos
+            self._cancelado = True
+            self.btn_esc.setEnabled(False)
+            self.btn_esc.setText("Cancelando…")
+            self.lbl_progreso.setText("Cancelando…")
+
+    def detener_escaneo(self, espera_ms: int = 5000) -> bool:
+        """
+        Frena el escaneo en curso y espera a que el hilo termine.
+
+        Se usa al cerrar la ventana, donde sí conviene bloquear un momento
+        antes que dejar un QThread corriendo.
+        """
+        hilo = self._hilo
+        if not hilo or not hilo.isRunning():
+            return True
+        self._escaneo_pendiente = None
+        hilo.requestInterruption()
+        return hilo.wait(espera_ms)
+
+    def _on_hilo_terminado(self):
+        """Restaura la UI y retoma el escaneo que quedó pendiente"""
+        if not self._es_del_hilo_actual():
+            return
         self._ui_escaneando(False)
-        self.lbl_progreso.setText("Escaneo cancelado")
-        QTimer.singleShot(2000, lambda: self.lbl_progreso.setText(""))
+        self.btn_esc.setEnabled(True)
+
+        pendiente, self._escaneo_pendiente = self._escaneo_pendiente, None
+        cancelado, self._cancelado = self._cancelado, False
+
+        if pendiente:
+            self._escanear(*pendiente)
+        elif cancelado:
+            self.lbl_progreso.setText("Escaneo cancelado")
+            QTimer.singleShot(2000, lambda: self.lbl_progreso.setText(""))
 
     # ── SLOTS DEL THREAD ────────────────────────────────────────────────────
 
+    def _es_del_hilo_actual(self) -> bool:
+        """
+        True si la señal viene del escaneo vigente.
+
+        Al cancelar y retomar un pedido, el hilo viejo puede alcanzar a emitir
+        algo; sin este filtro pisaría el progreso del escaneo nuevo.
+        """
+        emisor = self.sender()
+        return emisor is None or emisor is self._hilo
+
     def _on_progreso(self, archivo: str, numero: int):
         """Actualiza el label de progreso con el archivo actual"""
+        if not self._es_del_hilo_actual():
+            return
         nombre_corto = archivo if len(archivo) <= 40 else f"...{archivo[-37:]}"
         self.lbl_progreso.setText(f"Procesando archivo {numero}: {nombre_corto}")
 
     def _on_completado(self, resultado):
         """Recibe el resultado y actualiza la UI"""
+        if not self._es_del_hilo_actual():
+            return
         self.modelo.establecer_resultado(resultado)
         self._carpetas_usadas = self._carpetas_pendientes
         self._filtro_usado = self._filtro_pendiente
@@ -513,10 +592,7 @@ class VistaPanel(QWidget):
 
         # Mostrar info de dependencias si aplica
         if self._dep_pendiente:
-            QMessageBox.information(
-                self, "Completo",
-                f"Encontrados {len(resultado.archivos)} archivos relacionados"
-            )
+            self._avisar_dependencias(resultado, self._dep_pendiente)
             self._dep_pendiente = None
 
         # Un perfil cargado deja la selección para después del escaneo
@@ -535,7 +611,41 @@ class VistaPanel(QWidget):
 
     def _on_error(self, mensaje: str):
         """Muestra error del thread"""
+        if not self._es_del_hilo_actual():
+            return
         QMessageBox.critical(self, "❌ Error al escanear", mensaje)
+
+    def _avisar_dependencias(self, resultado, origen: Path):
+        """
+        Explica el resultado del análisis de dependencias.
+
+        Un archivo que los filtros dejan fuera (tamaño, .gitignore, tests o
+        minificado) produce un resultado vacío; sin este aviso parecería que
+        el archivo no tiene relaciones.
+        """
+        if not resultado.archivos:
+            detalle = ''
+            if resultado.ignorados:
+                lineas = [
+                    f"• {i.ruta_relativa} — {i.motivo}"
+                    for i in resultado.ignorados[:5]
+                ]
+                resto = len(resultado.ignorados) - len(lineas)
+                if resto > 0:
+                    lineas.append(f"… y {resto} más")
+                detalle = "\n\nQuedaron fuera:\n" + "\n".join(lineas)
+
+            QMessageBox.warning(
+                self, "Sin resultados",
+                f"Ningún archivo relacionado con:\n{origen}{detalle}\n\n"
+                "El detalle completo está en «Ignorados»."
+            )
+            return
+
+        QMessageBox.information(
+            self, "Completo",
+            f"Encontrados {len(resultado.archivos)} archivos relacionados"
+        )
 
     # ── HELPERS DE UI ───────────────────────────────────────────────────────
 
@@ -584,23 +694,75 @@ class VistaPanel(QWidget):
             self.lbl_files.setText(f"Archivos: {m['archivos_totales']}")
             self.lbl_files.setToolTip("")
 
-        self.lbl_ign.setText(f"Ignorados: {m['archivos_ignorados']}")
+        self._refrescar_ignorados(m['archivos_ignorados'])
         self.lbl_lines.setText(f"Líneas: {m['total_lineas']:,}")
         self.lbl_tokens.setText(f"Tokens: {m['tokens']:,}")
 
         motor = m['tokenizador']
         if m['tokens_exactos']:
-            self.lbl_tokens.setToolTip(f"Conteo exacto — {motor}")
+            self.lbl_tokens.setToolTip(
+                f"Conteo exacto del Markdown que se copia — {motor}"
+            )
         else:
             self.lbl_tokens.setToolTip(
-                f"Estimación aproximada — {motor}\n"
+                f"Estimación aproximada del Markdown que se copia — {motor}\n"
                 "Instalá tiktoken para un conteo exacto."
             )
 
         self._tokens_actuales = m['tokens']
         self._actualizar_recomendacion()
         self._recalcular_totales_arbol()
-        self.txt_prev.setPlainText(self.modelo.generar_contexto())
+        self.txt_prev.setPlainText(self.modelo.generar_contexto_markdown())
+
+    def _refrescar_ignorados(self, cantidad: int):
+        """
+        Muestra el conteo y deja el desglose por motivo en el tooltip.
+
+        Sin el detalle, un archivo que desaparece del árbol parece un bug:
+        el usuario no puede saber si lo filtró el .gitignore, el tamaño o una
+        carpeta reservada.
+        """
+        self.lbl_ign.setText(f"Ignorados: {cantidad}")
+
+        detalles = self.modelo.ignorados()
+        if not detalles:
+            self.lbl_ign.setToolTip("")
+            self.lbl_ign.setEnabled(False)
+            return
+
+        resumen = {}
+        for entrada in detalles:
+            if entrada.es_carpeta:
+                continue
+            resumen[entrada.motivo] = resumen.get(entrada.motivo, 0) + 1
+
+        lineas = [
+            f"{n} · {motivo}"
+            for motivo, n in sorted(resumen.items(), key=lambda par: (-par[1], par[0]))
+        ]
+        carpetas = sum(1 for e in detalles if e.es_carpeta)
+        if carpetas:
+            lineas.append(f"{carpetas} · carpeta(s) sin recorrer")
+
+        # Las carpetas omitidas pueden esconder miles de archivos: sin el
+        # sufijo, el conteo parece decir que solo quedaron fuera unos pocos.
+        if carpetas:
+            plural = 'carpeta' if carpetas == 1 else 'carpetas'
+            self.lbl_ign.setText(f"Ignorados: {cantidad} (+{carpetas} {plural})")
+
+        self.lbl_ign.setEnabled(True)
+        self.lbl_ign.setToolTip(
+            "Clic para ver qué quedó fuera y por qué\n\n" + "\n".join(lineas)
+        )
+
+    def _mostrar_ignorados(self):
+        """Abre el detalle de lo que el escaneo dejó fuera"""
+        detalles = self.modelo.ignorados()
+        if not detalles:
+            return
+
+        incluidos = len(self.modelo.resultado.archivos) if self.modelo.resultado else 0
+        DialogoIgnorados(detalles, incluidos, self).exec()
 
     def _actualizar_recomendacion(self):
         """Ajusta el aviso según el modelo objetivo elegido"""
@@ -935,10 +1097,11 @@ class VistaPanel(QWidget):
         # Con otro escaneo del que pide el perfil hay que volver a escanear.
         # La selección se aplica cuando el hilo termine (ver _on_completado).
         if self._requiere_rescan(carpetas, filtros):
-            self.config.config['excluir_tests'] = filtros.excluir_tests
-            self.config.config['excluir_minificados'] = filtros.excluir_minificados
-            self.config.config['tamano_max_kb'] = filtros.tamano_max_kb
-            self.config.guardar()
+            self.config.establecer(
+                excluir_tests=filtros.excluir_tests,
+                excluir_minificados=filtros.excluir_minificados,
+                tamano_max_kb=filtros.tamano_max_kb,
+            )
 
             self._seleccion_pendiente = seleccion
             self._escanear(carpetas=carpetas, filtro=filtros)
@@ -967,12 +1130,13 @@ class VistaPanel(QWidget):
             idx = self.cmb_modelo.findText(modelo) if modelo else -1
             if idx >= 0:
                 self.cmb_modelo.setCurrentIndex(idx)
+
+            # Se aplican y persisten con un solo refresco, el que hace
+            # _aplicar_seleccion_guardada al terminar todo.
+            self._on_optimizacion_cambiada()
+            self._on_plantilla_cambiada()
         finally:
             self._cargando_perfil = False
-
-        # Se aplican y persisten una sola vez, con un solo refresco al final
-        self._on_optimizacion_cambiada()
-        self._on_plantilla_cambiada()
 
     def _requiere_rescan(self, carpetas, filtros: OpcionesFiltro) -> bool:
         """True si el escaneo actual no cubre lo que pide el perfil"""
@@ -984,9 +1148,7 @@ class VistaPanel(QWidget):
 
     def _aplicar_seleccion_guardada(self, excluidos):
         """Aplica una lista de rutas excluidas al escaneo actual"""
-        vigentes = set(self.modelo.claves())
-        self.modelo.incluir_todo()
-        self.modelo.excluir([c for c in excluidos if c in vigentes])
+        self.modelo.reemplazar_exclusiones(excluidos)
         self._sincronizar_seleccion_arbol()
         self._refrescar_metricas()
 

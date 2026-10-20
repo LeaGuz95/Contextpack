@@ -4,7 +4,7 @@ App de escritorio (PySide6) que recorre un proyecto y arma un archivo de context
 pasarle a un modelo de IA: árbol de directorios más el contenido de los archivos, con los
 valores sensibles reemplazados por `[REDACTADO]`.
 
-**v1.9.0** | PySide6 | Leandro Guzmán, Pucha Soft
+**v1.10.1** | PySide6 | Leandro Guzmán, Pucha Soft
 
 Repositorio: https://github.com/LeaGuz95/Contextpack
 
@@ -40,6 +40,13 @@ source venv/bin/activate
 ```bash
 pip install -r requirements.txt
 python main.py
+```
+
+Para correr los tests hacen falta las dependencias de desarrollo aparte:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
 ```
 
 ---
@@ -164,6 +171,16 @@ El límite de tamaño existe por un caso concreto: en un proyecto real, un únic
 `release/win-unpacked/LICENSES.chromium.html` de 19,5 MB aportaba 4,13 millones de tokens, el
 99% del contexto. Con los valores por defecto ese proyecto pasó de 4.182.452 a 43.149 tokens.
 
+Aparte de estos filtros, el escaneo nunca entra en las carpetas fijas de la app (`.git`,
+`node_modules`, `__pycache__`, `venv`, `build`, `dist`, `bin`, `obj`, `out`, `target`,
+`release`, `coverage`), en ninguna carpeta que empiece con punto, ni en lo que excluya el
+`.gitignore` del proyecto. Por eso un `.py` puede no aparecer aunque exista: si vive dentro de
+`build/`, en una carpeta oculta o lo ignora el `.gitignore`, queda fuera.
+
+Para saber qué pasó con cada archivo, hacé clic en **Ignorados** en el panel derecho: abre el
+detalle agrupado por motivo —regla del `.gitignore`, tests, tamaño, extensión, carpeta fija…—
+con la ruta de cada archivo y un botón para copiar la lista.
+
 ### Arrastrar una carpeta
 
 Podés soltar una carpeta del explorador de Windows directamente sobre la ventana: queda como
@@ -249,26 +266,58 @@ contexto. Cuando redacta algo, lo anota: cada archivo afectado lleva un aviso
 Se procesan línea por línea con formato `CLAVE=VALOR`. Se redacta el valor solo si el
 **nombre de la clave** coincide con un patrón sensible. `DATABASE_URL`, `API_KEY` o
 `STRIPE_SECRET` se tapan; `PORT=3000` o `DEBUG=true` se dejan tal cual, porque no son
-secretos.
+secretos. También cubre variantes como `.env.example` o `.env.sample` si llegan al redactor.
+
+### Archivos YAML, TOML e INI
+
+Se procesan línea por línea con formato `clave: valor` o `clave = valor`. Se conserva el
+separador original, las comillas de la clave y los comentarios al final de la línea, así
+que el archivo sigue siendo válido:
+
+```yaml
+database:
+  password: [REDACTADO]
+  api_key: "[REDACTADO]"   # rotar en prod
+```
 
 ### Archivos de código
 
-Cubre `.py`, `.js`, `.ts`, `.tsx`, `.jsx`, `.cs`, `.java`, `.go`, `.rb`, `.php`, `.yaml`,
-`.yml`, `.json`, `.xml` y `.toml`. Busca:
+Cubre `.py`, `.js`, `.ts`, `.tsx`, `.jsx`, `.cs`, `.java`, `.go`, `.rs`, `.rb`, `.php`,
+`.json` y `.xml`. Busca:
 
 - URLs de base de datos (`postgres://`, `mysql://`, `mongodb://`, `redis://`, `sqlite://`,
   `mssql://`, `oracle://`) → `[REDACTADO:URL_BD]`
 - Tokens `Bearer <algo>` → `[REDACTADO:TOKEN]`
 - Formatos de keys conocidas: `sk-` (OpenAI), `ghp_` (GitHub), `xoxb-`/`xoxp-` (Slack),
   `AKIA` (AWS), `AIza` (Google) → `[REDACTADO:API_KEY]`
-- Asignaciones con nombre sensible: `api_key = "valor"` → `api_key = "[REDACTADO]"`, con al
-  menos 4 caracteres
+- Asignaciones con nombre sensible: `api_key = "valor"` → `api_key = "[REDACTADO]"`.
+  El nombre puede venir con prefijo (`STRIPE_API_KEY`, `DB_PASSWORD`) y con un sufijo
+  habitual (`API_KEY_PROD`, `SECRET_KEY_BASE`). La clave puede ir entre comillas
+  (`"api_key": "..."` en JSON), puede estar dentro de un subíndice
+  (`os.environ["API_KEY"] = "..."`, `settings['api_key'] = "..."`), el separador puede ser
+  `=`, `:` o el `:=` de Go, y el valor puede estar dentro de una llamada
+  (`API_KEY = os.getenv("API_KEY", "...")`). El resto de la línea se conserva igual.
 
 ### Lo que NO se redacta
 
 Markdown, texto plano, HTML, CSS, SCSS, C, C++ y headers **no pasan por el redactor**. Si
 tenés una key escrita en un `.md` o en un `.h`, va a salir tal cual. Revisá la vista previa
 antes de exportar.
+
+Dentro de los formatos que sí se redactan quedan estos huecos conocidos:
+
+- Valores sin comillas en código (`PASSWORD = hunter2`).
+- Nombres fuera de la lista blanca: `TOKEN = "..."`, `SECRET = "..."` o `key = "..."` no se
+  tapan, porque solo se reconocen los nombres del listado (`API_KEY`, `DB_PASSWORD`,
+  `STRIPE_SECRET`, `*_TOKEN` con prefijo…). La lista es a propósito: con un comodín se
+  redactarían `token_count` o `password_hint`, que no son secretos.
+- Bloques multilínea de YAML (`password: |` seguido del valor en las líneas de abajo).
+- Secretos embebidos en SQL (`CREATE USER ... IDENTIFIED BY '...'`).
+- Credenciales dentro de una URL cuando la clave no tiene nombre sensible
+  (`URL=https://usuario:clave@host/x`). Con `DATABASE_URL` o `MONGO_URI` sí se redacta.
+
+Al revés, leer una clave no se redacta porque no hay ningún valor a la vista:
+`password = os.environ["DB_PASSWORD"]` sale tal cual.
 
 Por eso Exportar pide marcar "He verificado" antes de escribir el archivo. Para que la
 advertencia deje de aparecer, poné `mostrar_advertencia_seguridad` en `false` dentro de
@@ -278,11 +327,16 @@ advertencia deje de aparecer, poné `mostrar_advertencia_seguridad` en `false` d
 
 ## Métricas y ventana de contexto
 
-El panel derecho muestra archivos incluidos, archivos ignorados, líneas totales y el
+El panel derecho muestra archivos incluidos, archivos ignorados (con las carpetas que no se
+recorrieron aparte, y clic para ver el motivo de cada exclusión), líneas totales y el
 **total de tokens** del contexto generado. El conteo lo hace `tiktoken` (encoding
 `o200k_base`, con respaldo a `cl100k_base`); si `tiktoken` no está instalado o todavía no
 bajó su vocabulario, cae a una estimación offline. El tooltip del número indica cuál se está
 usando.
+
+El número corresponde al **Markdown**, que es lo que se copia al portapapeles, se previsualiza
+y se usa para la recomendación de recorte. El export `.txt` tiene el mismo contenido con otro
+formato, así que su conteo puede diferir en unas pocas centenas de tokens.
 
 También hay un selector **Modelo objetivo** con el límite de cada chat:
 
@@ -511,6 +565,8 @@ ContextPack/
 ├── main.py                       # Punto de entrada
 ├── contextpack.spec              # Configuración de PyInstaller
 ├── requirements.txt
+├── requirements-dev.txt          # pytest, solo para desarrollo
+├── pytest.ini
 ├── logo.ico
 ├── README.md
 ├── .gitattributes                # Normalización de finales de línea
@@ -528,6 +584,7 @@ ContextPack/
 ├── models/
 │   ├── __init__.py
 │   └── data_models.py            # InfoArchivo, ResultadoEscaneo
+├── tests/                        # Suite de pytest (sin Qt salvo los diálogos)
 └── ui/
     ├── __init__.py               # API pública del paquete
     ├── main_window.py            # VentanaPrincipal, menú, footer, drag & drop

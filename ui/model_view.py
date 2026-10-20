@@ -65,6 +65,7 @@ class ModeloVista:
         """Fija el resultado del escaneo y descarta la selección anterior"""
         self.resultado = resultado
         self._excluidos = set()
+        self.constructor.limpiar_cache()
         self._invalidar()
 
     def _invalidar(self):
@@ -89,16 +90,28 @@ class ModeloVista:
 
     def excluir(self, claves: Iterable[str]):
         """Quita archivos de la selección"""
-        nuevas = set(claves) - self._excluidos
+        nuevas = {clave_ruta(c) for c in claves} - self._excluidos
         if nuevas:
             self._excluidos |= nuevas
             self._invalidar()
 
     def incluir(self, claves: Iterable[str]):
         """Devuelve archivos a la selección"""
-        quitar = set(claves) & self._excluidos
+        quitar = {clave_ruta(c) for c in claves} & self._excluidos
         if quitar:
             self._excluidos -= quitar
+            self._invalidar()
+
+    def reemplazar_exclusiones(self, claves: Iterable[str]):
+        """
+        Deja excluidos exactamente los archivos de `claves`.
+
+        Las rutas que ya no existen en el escaneo se descartan sin ruido: un
+        perfil guardado puede nombrar archivos que se renombraron o borraron.
+        """
+        nuevas = {clave_ruta(c) for c in claves} & set(self.claves())
+        if nuevas != self._excluidos:
+            self._excluidos = nuevas
             self._invalidar()
 
     def incluir_todo(self):
@@ -115,6 +128,12 @@ class ModeloVista:
         if todas != self._excluidos:
             self._excluidos = todas
             self._invalidar()
+
+    def ignorados(self) -> list:
+        """Detalle de lo que el último escaneo dejó fuera, con el motivo"""
+        if not self.resultado:
+            return []
+        return list(self.resultado.ignorados)
 
     def archivos_seleccionados(self) -> List[InfoArchivo]:
         """Archivos que hoy forman parte del contexto"""
@@ -154,7 +173,7 @@ class ModeloVista:
             # más la cabecera que lo precede. El resto del total medido
             # (cabeceras generales y árbol) se trata como costo fijo.
             costos = [
-                (info, info.token_count + tok.contar(self.constructor.cabecera_txt(info)))
+                (info, info.token_count + tok.contar(self.constructor.cabecera_md(info)))
                 for info in seleccionados
             ]
             restante = sum(costo for _, costo in costos)
@@ -198,6 +217,7 @@ class ModeloVista:
             arbol_directorios=self._podar_arbol(
                 self.resultado.arbol_directorios, '', self._excluidos
             ),
+            ignorados=list(self.resultado.ignorados),
         )
 
     def _podar_arbol(self, arbol: Dict, prefijo: str, excluidos: set) -> Dict:
@@ -263,7 +283,9 @@ class ModeloVista:
             'archivos_excluidos': len(self._excluidos),
             'archivos_ignorados': self.resultado.cantidad_ignorados,
             'total_lineas': filtrado.total_lineas,
-            'tokens': tok.contar(self.generar_contexto()),
+            # El conteo corresponde al Markdown, que es lo que se copia y se
+            # previsualiza. El export .txt puede diferir en unos pocos tokens.
+            'tokens': tok.contar(self.generar_contexto_markdown()),
             'tokenizador': tok.nombre,
             'tokens_exactos': tok.exacto
         }

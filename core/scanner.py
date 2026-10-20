@@ -8,10 +8,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Callable, Set
 
-from models.data_models import InfoArchivo, ResultadoEscaneo
+from models.data_models import EntradaIgnorada, InfoArchivo, ResultadoEscaneo
 from .dependencies import AnalizadorDependencias
 
 logger = logging.getLogger(__name__)
+
+
+# Motivos por los que un archivo queda fuera del contexto. El texto se muestra
+# tal cual en el detalle de la UI, así que va en castellano y sin jerga.
+MOTIVO_GITIGNORE = 'regla del .gitignore'
+MOTIVO_TESTS = 'excluir tests'
+MOTIVO_CARPETA_TESTS = 'carpeta de tests'
+MOTIVO_MINIFICADO = 'minificado'
+MOTIVO_TAMANO = 'supera el tamaño máximo'
+MOTIVO_EXTENSION = 'extensión no soportada'
+MOTIVO_LISTA_NEGRA = 'lista negra'
+MOTIVO_LECTURA = 'no se pudo leer'
+MOTIVO_CARPETA_RESERVADA = 'carpeta fija de la app'
+MOTIVO_CARPETA_OCULTA = 'carpeta oculta'
 
 
 @dataclass
@@ -151,60 +165,79 @@ class FiltroArchivos:
         self.gitignore = gitignore
         self.opciones = opciones or OpcionesFiltro()
 
-    def debe_ignorar_carpeta(self, nombre: str, ruta_relativa: str = '') -> bool:
-        """Determina si una carpeta debe ser ignorada"""
-        # Reglas hardcodeadas
-        if nombre in self.IGNORADAS or nombre.startswith('.'):
-            return True
+    def motivo_carpeta(self, nombre: str, ruta_relativa: str = '') -> Optional[str]:
+        """
+        Motivo por el que una carpeta se omite, o None si se recorre.
+
+        Las carpetas fijas y las ocultas también se reportan: son las que más
+        desconciertan cuando el código fuente vive en `build/` o similar.
+        """
+        if nombre in self.IGNORADAS:
+            return MOTIVO_CARPETA_RESERVADA
+
+        if nombre.startswith('.'):
+            return MOTIVO_CARPETA_OCULTA
 
         if self.opciones.excluir_tests and nombre.lower() in self.CARPETAS_TEST:
-            return True
+            return MOTIVO_CARPETA_TESTS
 
         # Reglas del .gitignore
         if self.gitignore and self.gitignore.activo:
             rel = ruta_relativa or nombre
             if self.gitignore.debe_ignorar(rel, es_directorio=True):
-                return True
+                return MOTIVO_GITIGNORE
 
-        return False
+        return None
+
+    def debe_ignorar_carpeta(self, nombre: str, ruta_relativa: str = '') -> bool:
+        """Determina si una carpeta debe ser ignorada"""
+        return self.motivo_carpeta(nombre, ruta_relativa) is not None
+
+    def motivo_exclusion(self, ruta: Path, ruta_relativa: str = '') -> Optional[str]:
+        """
+        Motivo por el que un archivo queda fuera, o None si se incluye.
+
+        Los .env se incluyen siempre: el redactor se encarga de su contenido.
+        """
+        nombre = ruta.name.lower()
+
+        if nombre in self.IGNORAR_COMPLETAMENTE:
+            return MOTIVO_LISTA_NEGRA
+
+        # Los minificados no aportan nada al contexto y pueden ser enormes
+        if self.opciones.excluir_minificados and '.min.' in nombre:
+            return MOTIVO_MINIFICADO
+
+        if self.opciones.excluir_tests and _es_archivo_test(ruta.name):
+            return MOTIVO_TESTS
+
+        # Verificar .gitignore antes de incluir
+        if self.gitignore and self.gitignore.activo:
+            rel = ruta_relativa or ruta.name
+            if self.gitignore.debe_ignorar(rel, es_directorio=False):
+                return MOTIVO_GITIGNORE
+
+        if nombre in self.ARCHIVOS_ENV:
+            return None
+
+        if ruta.suffix.lower() not in self.EXTENSIONES:
+            return MOTIVO_EXTENSION
+
+        if self.opciones.tamano_max_kb:
+            try:
+                if ruta.stat().st_size > self.opciones.tamano_max_kb * 1024:
+                    return MOTIVO_TAMANO
+            except OSError:
+                pass
+
+        return None
 
     def debe_incluir_archivo(self, ruta: Path, ruta_relativa: str = '') -> bool:
         """
         Determina si un archivo debe ser incluido.
         Los archivos .env se incluyen y serán redactados.
         """
-        nombre = ruta.name.lower()
-
-        if nombre in self.IGNORAR_COMPLETAMENTE:
-            return False
-
-        # Los minificados no aportan nada al contexto y pueden ser enormes
-        if self.opciones.excluir_minificados and '.min.' in nombre:
-            return False
-
-        if self.opciones.excluir_tests and _es_archivo_test(ruta.name):
-            return False
-
-        # Verificar .gitignore antes de incluir
-        if self.gitignore and self.gitignore.activo:
-            rel = ruta_relativa or ruta.name
-            if self.gitignore.debe_ignorar(rel, es_directorio=False):
-                return False
-
-        if nombre in self.ARCHIVOS_ENV:
-            return True
-
-        if ruta.suffix.lower() not in self.EXTENSIONES:
-            return False
-
-        if self.opciones.tamano_max_kb:
-            try:
-                if ruta.stat().st_size > self.opciones.tamano_max_kb * 1024:
-                    return False
-            except OSError:
-                pass
-
-        return True
+        return self.motivo_exclusion(ruta, ruta_relativa) is None
 
 
 class EscanerProyecto:
@@ -246,7 +279,7 @@ class EscanerProyecto:
             )
 
         archivos = []
-        ignorados = 0
+        detalle_ignorados: List[EntradaIgnorada] = []
         lineas = 0
         contador = 0
         arbol: Dict = {}
@@ -258,7 +291,7 @@ class EscanerProyecto:
                 break
 
             rel_dir = Path(ruta_dir).relative_to(raiz)
-            dirs[:] = self._filtrar_dirs(dirs, rel_dir)
+            dirs[:] = self._filtrar_dirs(dirs, rel_dir, detalle_ignorados)
 
             if self._excluida_por_carpetas(rel_dir, carpetas):
                 dirs.clear()
@@ -274,34 +307,37 @@ class EscanerProyecto:
                 arch = Path(ruta_dir) / f
                 rel_arch = str(rel_dir / f) if str(rel_dir) != '.' else f
 
-                if self.filtro.debe_incluir_archivo(arch, ruta_relativa=rel_arch):
-                    try:
-                        lin = sum(1 for _ in arch.open('r', encoding='utf-8', errors='ignore'))
-                        archivos.append(InfoArchivo(
-                            ruta=arch,
-                            ruta_relativa=str(arch.relative_to(raiz)),
-                            lineas=lin,
-                            tamano_bytes=self._tamano(arch)
-                        ))
-                        lineas += lin
-                        contador += 1
-                        nivel[f] = None
+                motivo = self.filtro.motivo_exclusion(arch, ruta_relativa=rel_arch)
+                if motivo is not None:
+                    # Los dotfiles sin extensión soportada (.gitignore,
+                    # .editorconfig…) nunca interesan y ensucian el detalle.
+                    if motivo != MOTIVO_EXTENSION or not f.startswith('.'):
+                        detalle_ignorados.append(EntradaIgnorada(rel_arch, motivo))
+                    continue
 
-                        if callback_progreso:
-                            callback_progreso(f, contador)
+                try:
+                    info = self._leer_info(arch, raiz)
+                    archivos.append(info)
+                    lineas += info.lineas
+                    contador += 1
+                    self._agregar_archivo_al_arbol(nivel, f)
 
-                    except Exception:
-                        ignorados += 1
-                        logger.debug('No se pudo leer %s', arch, exc_info=True)
-                else:
-                    ignorados += 1
+                    if callback_progreso:
+                        callback_progreso(f, contador)
+
+                except Exception:
+                    detalle_ignorados.append(EntradaIgnorada(rel_arch, MOTIVO_LECTURA))
+                    logger.debug('No se pudo leer %s', arch, exc_info=True)
 
         return ResultadoEscaneo(
             ruta_raiz=raiz,
             archivos=archivos,
-            cantidad_ignorados=ignorados,
+            cantidad_ignorados=sum(
+                1 for i in detalle_ignorados if not i.es_carpeta
+            ),
             total_lineas=lineas,
-            arbol_directorios=arbol
+            arbol_directorios=arbol,
+            ignorados=detalle_ignorados,
         )
 
     def _escanear_dependencias(
@@ -314,6 +350,7 @@ class EscanerProyecto:
         """Escanea archivos relacionados por dependencias"""
         archivos_rel = AnalizadorDependencias.encontrar_relacionados(inicial, raiz)
         archivos = []
+        detalle_ignorados: List[EntradaIgnorada] = []
         lineas = 0
         contador = 0
 
@@ -324,45 +361,64 @@ class EscanerProyecto:
 
             rel_arch = str(arch.relative_to(raiz))
 
-            if self.filtro.debe_incluir_archivo(arch, ruta_relativa=rel_arch):
-                try:
-                    lin = sum(1 for _ in arch.open('r', encoding='utf-8', errors='ignore'))
-                    archivos.append(InfoArchivo(
-                        ruta=arch,
-                        ruta_relativa=rel_arch,
-                        lineas=lin,
-                        tamano_bytes=self._tamano(arch)
-                    ))
-                    lineas += lin
-                    contador += 1
+            motivo = self.filtro.motivo_exclusion(arch, ruta_relativa=rel_arch)
+            if motivo is not None:
+                if motivo != MOTIVO_EXTENSION or not arch.name.startswith('.'):
+                    detalle_ignorados.append(EntradaIgnorada(rel_arch, motivo))
+                continue
 
-                    if callback_progreso:
-                        callback_progreso(arch.name, contador)
+            try:
+                info = self._leer_info(arch, raiz)
+                archivos.append(info)
+                lineas += info.lineas
+                contador += 1
 
-                except Exception:
-                    logger.debug('No se pudo leer %s', arch, exc_info=True)
+                if callback_progreso:
+                    callback_progreso(arch.name, contador)
+
+            except Exception:
+                detalle_ignorados.append(EntradaIgnorada(rel_arch, MOTIVO_LECTURA))
+                logger.debug('No se pudo leer %s', arch, exc_info=True)
 
         arbol: Dict = {}
         for info in archivos:
-            partes = Path(info.ruta_relativa).parts
-            nivel = arbol
-            for i, parte in enumerate(partes):
-                if i == len(partes) - 1:
-                    nivel[parte] = None
-                else:
-                    if parte not in nivel:
-                        nivel[parte] = {}
-                    nivel = nivel[parte]
+            self._agregar_archivo_al_arbol(arbol, info.ruta_relativa)
 
         return ResultadoEscaneo(
             ruta_raiz=raiz,
             archivos=archivos,
-            cantidad_ignorados=0,
+            cantidad_ignorados=sum(
+                1 for i in detalle_ignorados if not i.es_carpeta
+            ),
             total_lineas=lineas,
-            arbol_directorios={'.': arbol} if arbol else {}
+            arbol_directorios={'.': arbol} if arbol else {},
+            ignorados=detalle_ignorados,
         )
 
     # ── HELPERS ─────────────────────────────────────────────────────────────
+
+    def _leer_info(self, arch: Path, raiz: Path) -> InfoArchivo:
+        """Arma la InfoArchivo de un archivo incluido, contando sus líneas"""
+        lineas = 0
+        with arch.open('r', encoding='utf-8', errors='ignore') as f:
+            for _ in f:
+                lineas += 1
+
+        return InfoArchivo(
+            ruta=arch,
+            ruta_relativa=str(arch.relative_to(raiz)),
+            lineas=lineas,
+            tamano_bytes=self._tamano(arch),
+        )
+
+    @staticmethod
+    def _agregar_archivo_al_arbol(arbol: Dict, rel_arch: str):
+        """Insertar un archivo en el árbol de directorios, creando los nodos"""
+        partes = Path(rel_arch).parts
+        nivel = arbol
+        for parte in partes[:-1]:
+            nivel = nivel.setdefault(parte, {})
+        nivel[partes[-1]] = None
 
     @staticmethod
     def _tamano(arch: Path) -> int:
@@ -372,15 +428,22 @@ class EscanerProyecto:
         except OSError:
             return 0
 
-    def _filtrar_dirs(self, dirs: List[str], rel_dir: Path) -> List[str]:
+    def _filtrar_dirs(
+        self,
+        dirs: List[str],
+        rel_dir: Path,
+        detalle_ignorados: Optional[List[EntradaIgnorada]] = None,
+    ) -> List[str]:
         """Filtra los subdirectorios según las reglas del proyecto y .gitignore"""
-        return [
-            d for d in dirs
-            if not self.filtro.debe_ignorar_carpeta(
-                d,
-                ruta_relativa=str(rel_dir / d) if str(rel_dir) != '.' else d
-            )
-        ]
+        mantener = []
+        for d in dirs:
+            rel = str(rel_dir / d) if str(rel_dir) != '.' else d
+            motivo = self.filtro.motivo_carpeta(d, rel)
+            if motivo is None:
+                mantener.append(d)
+            elif detalle_ignorados is not None:
+                detalle_ignorados.append(EntradaIgnorada(rel, motivo, es_carpeta=True))
+        return mantener
 
     def _excluida_por_carpetas(self, rel_dir: Path, carpetas: Optional[List[str]]) -> bool:
         """Determina si un directorio está fuera de las carpetas seleccionadas"""

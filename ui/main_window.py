@@ -25,7 +25,7 @@ class VentanaPrincipal(QMainWindow):
         self.config = config
         self.modelo = ModeloVista(config)
 
-        self.setWindowTitle("ContextPack v1.9.0 — Pucha Soft")
+        self.setWindowTitle("ContextPack v1.10.1 — Pucha Soft")
         self.setGeometry(
             100, 100,
             config.config.get('ventana_ancho', 1200),
@@ -102,7 +102,7 @@ class VentanaPrincipal(QMainWindow):
         lbl_autor = QLabel("Desarrollado por <b>Leandro Guzmán</b> | Pucha Soft")
         lbl_autor.setStyleSheet("color: #5A5A7A; font-size: 11px;")
 
-        lbl_ver = QLabel("v1.9.0")
+        lbl_ver = QLabel("v1.10.1")
         lbl_ver.setStyleSheet("color: #4A9FFF; font-size: 11px; font-weight: 600;")
 
         fl.addWidget(lbl_autor)
@@ -151,8 +151,7 @@ class VentanaPrincipal(QMainWindow):
 
     def _limpiar_historial(self):
         """Limpia el historial de proyectos recientes"""
-        self.config.config['proyectos_recientes'] = []
-        self.config.guardar()
+        self.config.establecer(proyectos_recientes=[])
         self._actualizar_recientes()
 
     def _abrir_reciente(self, ruta: str):
@@ -164,7 +163,7 @@ class VentanaPrincipal(QMainWindow):
         QMessageBox.about(
             self,
             "Acerca de",
-            "<h2>ContextPack v1.9.0 </h2>"
+            "<h2>ContextPack v1.10.1 </h2>"
             "<p><b>Desarrollado por:</b> Leandro Guzmán<br>"        
             "<p>Generador de contexto para IA</p>"
             "<hr><p><i>© 2026 Pucha Soft</i></p>"
@@ -172,9 +171,11 @@ class VentanaPrincipal(QMainWindow):
 
     def closeEvent(self, event):
         """Maneja el cierre de la ventana"""
-        self.config.config.update({
-            'ventana_ancho': self.width(),
-            'ventana_alto': self.height()
-        })
-        self.config.guardar()
+        # Un escaneo a medio terminar deja el hilo vivo: hay que frenarlo
+        # antes de aceptar el cierre o Qt avisa al destruir la ventana.
+        self.panel.detener_escaneo()
+        self.config.establecer(
+            ventana_ancho=self.width(),
+            ventana_alto=self.height(),
+        )
         event.accept()

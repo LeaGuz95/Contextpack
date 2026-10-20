@@ -63,7 +63,8 @@ class Optimizador:
         if estilo in _ESTILO_PYTHON:
             return _sin_comentarios_python(texto)
         if estilo in _ESTILO_C:
-            return _sin_comentarios_c(texto)
+            # En CSS el `//` no es comentario: aparece en url(http://…)
+            return _sin_comentarios_c(texto, permite_linea=estilo != '.css')
         if estilo in _ESTILO_LINEA:
             return _sin_comentarios_linea(texto)
         return texto
@@ -92,8 +93,13 @@ def _sin_comentarios_python(codigo: str) -> str:
         return codigo
 
 
-def _sin_comentarios_c(codigo: str) -> str:
-    """Quita // y /* */ respetando strings, template literals y escapes"""
+def _sin_comentarios_c(codigo: str, permite_linea: bool = True) -> str:
+    """
+    Quita `//` y `/* */` respetando strings, template literals y escapes.
+
+    `permite_linea=False` para CSS, donde `//` solo aparece dentro de
+    `url(http://…)` y no es un comentario.
+    """
     salida = []
     i = 0
     n = len(codigo)
@@ -128,7 +134,7 @@ def _sin_comentarios_c(codigo: str) -> str:
             i += 1
             continue
 
-        if codigo.startswith('//', i):
+        if permite_linea and codigo.startswith('//', i):
             while i < n and codigo[i] != '\n':
                 i += 1
             continue

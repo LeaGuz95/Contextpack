@@ -8,11 +8,17 @@ from typing import List, Optional
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QCheckBox, QTreeWidget, QTreeWidgetItem,
-    QGroupBox, QSpinBox, QPlainTextEdit
+    QGroupBox, QSpinBox, QPlainTextEdit, QLineEdit, QHeaderView,
+    QApplication
 )
 from PySide6.QtCore import Qt
 
-from core import FiltroArchivos, OpcionesFiltro
+from core import (
+    FiltroArchivos, LectorGitignore, OpcionesFiltro,
+    MOTIVO_CARPETA_OCULTA, MOTIVO_CARPETA_RESERVADA, MOTIVO_CARPETA_TESTS,
+    MOTIVO_EXTENSION, MOTIVO_GITIGNORE, MOTIVO_LECTURA, MOTIVO_LISTA_NEGRA,
+    MOTIVO_MINIFICADO, MOTIVO_TAMANO, MOTIVO_TESTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +46,12 @@ class DialogoSelectorCarpetas(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Selecciona carpetas a incluir:"))
 
-        # Listar carpetas del proyecto
-        filtro = FiltroArchivos()
+        # Listar carpetas del proyecto con los mismos filtros que el escaneo
+        # (incluido el .gitignore), para no ofrecer lo que después se descarta.
+        filtro = FiltroArchivos(
+            gitignore=LectorGitignore(self.ruta),
+            opciones=self.opciones,
+        )
         carpetas = sorted([
             x for x in self.ruta.iterdir()
             if x.is_dir() and not filtro.debe_ignorar_carpeta(x.name)
@@ -127,6 +137,135 @@ class DialogoSelectorCarpetas(QDialog):
         )
 
 
+class DialogoIgnorados(QDialog):
+    """Detalle de los archivos y carpetas que el escaneo dejó fuera"""
+
+    # Lo que más desconcierta va primero; lo obvio (carpetas fijas) al final
+    ORDEN = [
+        MOTIVO_GITIGNORE, MOTIVO_TESTS, MOTIVO_CARPETA_TESTS,
+        MOTIVO_TAMANO, MOTIVO_MINIFICADO, MOTIVO_EXTENSION,
+        MOTIVO_LISTA_NEGRA, MOTIVO_LECTURA,
+        MOTIVO_CARPETA_RESERVADA, MOTIVO_CARPETA_OCULTA,
+    ]
+
+    PLEGADOS = {MOTIVO_CARPETA_RESERVADA, MOTIVO_CARPETA_OCULTA}
+
+    def __init__(self, ignorados, incluidos: int = 0, parent=None):
+        super().__init__(parent)
+        self._entradas = list(ignorados)
+        self.setWindowTitle("Qué quedó fuera del escaneo")
+        self.setMinimumSize(680, 440)
+        self._init_ui(incluidos)
+
+    def _init_ui(self, incluidos: int):
+        """Inicializa la interfaz"""
+        layout = QVBoxLayout(self)
+
+        archivos = sum(1 for e in self._entradas if not e.es_carpeta)
+        carpetas = len(self._entradas) - archivos
+
+        intro = QLabel(
+            f"El contexto incluyó {incluidos} archivo(s). Quedaron fuera "
+            f"{archivos} archivo(s) y {carpetas} carpeta(s), agrupados por motivo."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.txt_filtro = QLineEdit()
+        self.txt_filtro.setPlaceholderText("Filtrar por ruta o motivo…")
+        self.txt_filtro.textChanged.connect(self._aplicar_filtro)
+        layout.addWidget(self.txt_filtro)
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderLabels(["Ruta", "Motivo"])
+        self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        layout.addWidget(self.tree)
+
+        self._poblar()
+
+        btns = QHBoxLayout()
+        btn_copiar = QPushButton("Copiar lista")
+        btn_copiar.clicked.connect(self._copiar)
+
+        btn_cerrar = QPushButton("Cerrar")
+        btn_cerrar.clicked.connect(self.accept)
+        btn_cerrar.setDefault(True)
+
+        btns.addWidget(btn_copiar)
+        btns.addStretch()
+        btns.addWidget(btn_cerrar)
+        layout.addLayout(btns)
+
+    def _clave_orden(self, motivo: str):
+        """Ordena los grupos por relevancia y deja los desconocidos al final"""
+        if motivo in self.ORDEN:
+            return (self.ORDEN.index(motivo), '')
+        return (len(self.ORDEN), motivo)
+
+    def _poblar(self):
+        """Arma un grupo por motivo con sus rutas"""
+        grupos = {}
+        for entrada in self._entradas:
+            grupos.setdefault(entrada.motivo, []).append(entrada)
+
+        for motivo in sorted(grupos, key=self._clave_orden):
+            entradas = sorted(grupos[motivo], key=lambda e: e.ruta_relativa.lower())
+
+            grupo = QTreeWidgetItem(self.tree, [f"{motivo} ({len(entradas)})", ""])
+            grupo.setFirstColumnSpanned(True)
+            fuente = grupo.font(0)
+            fuente.setBold(True)
+            grupo.setFont(0, fuente)
+
+            for entrada in entradas:
+                ruta = entrada.ruta_relativa
+                if entrada.es_carpeta:
+                    ruta += "/"
+                hijo = QTreeWidgetItem(grupo, [ruta, motivo])
+                hijo.setToolTip(0, ruta)
+
+            grupo.setExpanded(motivo not in self.PLEGADOS)
+
+    def _aplicar_filtro(self, texto: str):
+        """Oculta las filas que no coinciden con el texto buscado"""
+        buscado = texto.strip().lower()
+
+        for i in range(self.tree.topLevelItemCount()):
+            grupo = self.tree.topLevelItem(i)
+            visibles = 0
+            for j in range(grupo.childCount()):
+                hijo = grupo.child(j)
+                coincide = (
+                    not buscado
+                    or buscado in hijo.text(0).lower()
+                    or buscado in hijo.text(1).lower()
+                )
+                hijo.setHidden(not coincide)
+                visibles += int(coincide)
+
+            grupo.setHidden(visibles == 0)
+            if buscado and visibles:
+                grupo.setExpanded(True)
+
+    def _copiar(self):
+        """Copia el detalle como texto plano, agrupado por motivo"""
+        lineas = []
+        for i in range(self.tree.topLevelItemCount()):
+            grupo = self.tree.topLevelItem(i)
+            if grupo.isHidden():
+                continue
+            lineas.append(grupo.text(0))
+            for j in range(grupo.childCount()):
+                hijo = grupo.child(j)
+                if not hijo.isHidden():
+                    lineas.append(f"  {hijo.text(0)}")
+            lineas.append("")
+
+        QApplication.clipboard().setText("\n".join(lineas).rstrip())
+
+
 class DialogoPlantilla(QDialog):
     """Diálogo para editar el texto de la plantilla personalizada"""
 
@@ -170,9 +309,15 @@ class DialogoPlantilla(QDialog):
 class DialogoAnalizarDep(QDialog):
     """Diálogo para análisis de dependencias"""
     
-    def __init__(self, ruta: Path, parent=None):
+    def __init__(
+        self,
+        ruta: Path,
+        opciones: Optional[OpcionesFiltro] = None,
+        parent=None
+    ):
         super().__init__(parent)
         self.ruta = ruta
+        self.opciones = opciones or OpcionesFiltro()
         self.archivo = None
         self.setWindowTitle("Análisis de Dependencias")
         self.setMinimumSize(600, 400)
@@ -203,8 +348,11 @@ class DialogoAnalizarDep(QDialog):
         layout.addLayout(btns)
     
     def _poblar_arbol(self):
-        """Puebla el árbol con archivos del proyecto"""
-        filtro = FiltroArchivos()
+        """Puebla el árbol con los archivos que el escaneo sí incluiría"""
+        filtro = FiltroArchivos(
+            gitignore=LectorGitignore(self.ruta),
+            opciones=self.opciones,
+        )
         
         def agregar_items(parent, directorio):
             try:
@@ -217,12 +365,17 @@ class DialogoAnalizarDep(QDialog):
                 return
             
             for item in items:
+                try:
+                    rel = str(item.relative_to(self.ruta))
+                except ValueError:
+                    rel = item.name
+
                 if item.is_dir():
-                    if not filtro.debe_ignorar_carpeta(item.name):
+                    if not filtro.debe_ignorar_carpeta(item.name, rel):
                         tree_item = QTreeWidgetItem(parent, [f"📁 {item.name}"])
                         tree_item.setData(0, Qt.UserRole, str(item))
                         agregar_items(tree_item, item)
-                elif filtro.debe_incluir_archivo(item):
+                elif filtro.debe_incluir_archivo(item, rel):
                     tree_item = QTreeWidgetItem(parent, [item.name])
                     tree_item.setData(0, Qt.UserRole, str(item))
         

@@ -1,7 +1,7 @@
 """
 Modelos de datos para ContextPack
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict
 
@@ -17,6 +17,14 @@ class InfoArchivo:
 
 
 @dataclass
+class EntradaIgnorada:
+    """Archivo o carpeta que quedó fuera del escaneo, con el motivo"""
+    ruta_relativa: str
+    motivo: str
+    es_carpeta: bool = False
+
+
+@dataclass
 class ResultadoEscaneo:
     """Resultado del escaneo de un proyecto"""
     ruta_raiz: Path
@@ -24,3 +32,4 @@ class ResultadoEscaneo:
     cantidad_ignorados: int
     total_lineas: int
     arbol_directorios: Dict
+    ignorados: List[EntradaIgnorada] = field(default_factory=list)

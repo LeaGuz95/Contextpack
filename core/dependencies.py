@@ -1,6 +1,7 @@
 """
 Análisis de dependencias entre archivos
 """
+import ast
 import re
 import logging
 from pathlib import Path
@@ -13,10 +14,6 @@ class AnalizadorDependencias:
     """Analiza dependencias entre archivos de código"""
 
     PATRONES = {
-        'python': [
-            r'from\s+([.\w]+)\s+import',
-            r'import\s+([.\w]+)'
-        ],
         'javascript': [
             r'import\s+.*\s+from\s+[\'"]([^\'"]+)[\'"]',
             r'require\([\'"]([^\'"]+)[\'"]\)'
@@ -76,8 +73,8 @@ class AnalizadorDependencias:
         ext = archivo.suffix.lower()
 
         if ext == '.py':
-            lang = 'python'
-        elif ext in ['.js', '.jsx', '.ts', '.tsx']:
+            return cls._extraer_deps_python(archivo)
+        if ext in ['.js', '.jsx', '.ts', '.tsx']:
             lang = 'javascript'
         elif ext == '.cs':
             lang = 'csharp'
@@ -103,6 +100,43 @@ class AnalizadorDependencias:
         except Exception:
             logger.debug('Error extrayendo dependencias de %s', archivo, exc_info=True)
             return []
+
+    @classmethod
+    def _extraer_deps_python(cls, archivo: Path) -> List[str]:
+        """
+        Extrae imports de Python con el AST, no con regex.
+
+        De `from X import Y` salen dos dependencias (`X` y `X.Y`): la segunda
+        resuelve cuando Y es un módulo y no molesta cuando es una función.
+        De `from . import panel` sale `.panel`, que resuelve a panel.py.
+        Si el archivo no compila devuelve lista vacía: el escaneo sigue.
+        """
+        try:
+            fuente = archivo.read_text(encoding='utf-8', errors='ignore')
+            arbol = ast.parse(fuente)
+        except (OSError, SyntaxError, ValueError):
+            logger.debug('No se pudo parsear %s', archivo, exc_info=True)
+            return []
+
+        deps = []
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.Import):
+                deps.extend(alias.name for alias in nodo.names)
+            elif isinstance(nodo, ast.ImportFrom):
+                prefijo = '.' * (nodo.level or 0)
+                modulo = nodo.module or ''
+                if modulo:
+                    deps.append(prefijo + modulo)
+                    deps.extend(
+                        prefijo + modulo + '.' + alias.name
+                        for alias in nodo.names if alias.name != '*'
+                    )
+                else:
+                    deps.extend(
+                        prefijo + alias.name
+                        for alias in nodo.names if alias.name != '*'
+                    )
+        return deps
 
     @classmethod
     def _extraer_deps_go(cls, archivo: Path) -> List[str]:
@@ -210,28 +244,23 @@ class AnalizadorDependencias:
                     return init
             return None
 
-        # ── Filtrar stdlib ───────────────────────────────────────────────
-        raiz_dep = dep.split('.')[0]
-        if es_python and raiz_dep in cls.STDLIB_PYTHON:
-            return None
-        if es_js and raiz_dep in cls.STDLIB_JS:
-            return None
-        if es_java:
-            for pkg in cls.STDLIB_JAVA:
-                if dep.startswith(pkg):
-                    return None
-
         # ── Python absoluto ──────────────────────────────────────────────
+        # El proyecto tiene prioridad: un módulo local llamado `queue` o
+        # `email` gana sobre el de la biblioteca estándar.
         if es_python:
-            if not (raiz / raiz_dep).exists() and not (raiz / f"{raiz_dep}.py").exists():
-                return None
-            ruta_m = raiz / dep.replace('.', '/')
-            c = ruta_m.with_suffix('.py')
-            if c.exists() and _es_del_proyecto(c, raiz):
-                return c
-            init = ruta_m / '__init__.py'
-            if init.exists() and _es_del_proyecto(init, raiz):
-                return init
+            raiz_dep = dep.split('.')[0]
+            for base in (raiz, raiz / 'src'):
+                if not ((base / raiz_dep).exists()
+                        or (base / f"{raiz_dep}.py").exists()):
+                    continue
+                ruta_m = base / dep.replace('.', '/')
+                c = ruta_m.with_suffix('.py')
+                if c.exists() and _es_del_proyecto(c, raiz):
+                    return c
+                init = ruta_m / '__init__.py'
+                if init.exists() and _es_del_proyecto(init, raiz):
+                    return init
+            return None
 
         # ── JS/TS absoluto ───────────────────────────────────────────────
         if es_js:
@@ -246,6 +275,14 @@ class AnalizadorDependencias:
                     c = rm / f'index{ext_p}'
                     if c.exists() and _es_del_proyecto(c, raiz):
                         return c
+
+        # ── Filtrar stdlib (solo si el proyecto no lo tenía) ─────────────
+        if es_js and dep.split('.')[0] in cls.STDLIB_JS:
+            return None
+        if es_java:
+            for pkg in cls.STDLIB_JAVA:
+                if dep.startswith(pkg):
+                    return None
 
         # ── Java absoluto ────────────────────────────────────────────────
         if es_java:

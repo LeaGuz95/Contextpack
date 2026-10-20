@@ -2,7 +2,8 @@
 Construcción del contexto para IA
 """
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
+
 from models.data_models import ResultadoEscaneo
 from .optimizer import OpcionesOptimizacion, Optimizador
 from .redactor import RedactorSensible
@@ -30,18 +31,26 @@ class ConstructorContexto:
         self.optimizador = Optimizador()
         self.opciones = opciones or OpcionesOptimizacion()
         self.plantilla = ""
+        # (ruta, toggles) -> (sello, contenido, tokens, redacciones)
+        self._cache: Dict[Tuple, Tuple] = {}
 
     def establecer_opciones(self, opciones: OpcionesOptimizacion):
         """Cambia las optimizaciones aplicadas al leer cada archivo"""
-        self.opciones = opciones
+        if opciones != self.opciones:
+            self.opciones = opciones
+            self._cache.clear()
 
     def establecer_plantilla(self, texto: str):
         """Cambia las instrucciones que se anteponen al contexto"""
         self.plantilla = (texto or "").strip()
 
+    def limpiar_cache(self):
+        """Olvida el contenido procesado de todos los archivos"""
+        self._cache.clear()
+
     def construir(self, resultado: ResultadoEscaneo) -> str:
         """
-        Construye el contexto completo del proyecto.
+        Construye el contexto completo del proyecto en texto plano.
 
         Args:
             resultado: Resultado del escaneo
@@ -49,7 +58,7 @@ class ConstructorContexto:
         Returns:
             String con el contexto formateado (datos sensibles redactados)
         """
-        total_redacciones = 0
+        entradas, total_redacciones = self._procesar(resultado)
 
         lineas = []
 
@@ -71,17 +80,15 @@ class ConstructorContexto:
             ""
         ])
 
-        # Agregar contenido de archivos
-        for info in sorted(resultado.archivos, key=lambda f: f.ruta_relativa):
+        for info, contenido, redacciones in entradas:
             lineas.append(self.cabecera_txt(info))
 
-            contenido_final, n = self._contenido_archivo(info)
-            total_redacciones += n
+            if redacciones > 0:
+                lineas.append(
+                    f"# [AVISO: {redacciones} valor(es) sensible(s) redactado(s) en este archivo]"
+                )
 
-            if n > 0:
-                lineas.append(f"# [AVISO: {n} valor(es) sensible(s) redactado(s) en este archivo]")
-
-            lineas.append(contenido_final)
+            lineas.append(contenido)
             lineas.append("")
 
         # Nota al pie si hubo redacciones
@@ -101,7 +108,7 @@ class ConstructorContexto:
         Usa headers, code fences y blockquotes para que la IA
         distinga claramente entre estructura y contenido de archivos.
         """
-        total_redacciones = 0
+        entradas, total_redacciones = self._procesar(resultado)
 
         lineas = []
 
@@ -130,22 +137,18 @@ class ConstructorContexto:
             ""
         ])
 
-        # Agregar contenido de archivos
-        for info in sorted(resultado.archivos, key=lambda f: f.ruta_relativa):
-            lineas.append(f"## ARCHIVO: {info.ruta_relativa}")
+        for info, contenido, redacciones in entradas:
+            lineas.append(self.cabecera_md(info))
             lineas.append("")
 
-            contenido_final, n = self._contenido_archivo(info)
-            total_redacciones += n
-
-            if n > 0:
+            if redacciones > 0:
                 lineas.append(
-                    f"> [AVISO: {n} valor(es) sensible(s) redactado(s) en este archivo]"
+                    f"> [AVISO: {redacciones} valor(es) sensible(s) redactado(s) en este archivo]"
                 )
                 lineas.append("")
 
             lineas.append(f"```{self._lenguaje_fence(info.ruta)}")
-            lineas.append(contenido_final)
+            lineas.append(contenido)
             lineas.append("```")
             lineas.append("")
 
@@ -166,19 +169,75 @@ class ConstructorContexto:
         """Cabecera que precede a un archivo en el contexto de texto plano"""
         return f"===== ARCHIVO: {info.ruta_relativa} ====="
 
-    def _contenido_archivo(self, info) -> tuple:
-        """Lee, optimiza y redacta el contenido de un archivo"""
+    def cabecera_md(self, info) -> str:
+        """Cabecera que precede a un archivo en el contexto Markdown"""
+        return f"## ARCHIVO: {info.ruta_relativa}"
+
+    # ── PROCESAMIENTO POR ARCHIVO ──────────────────────────────────────────
+
+    def _procesar(
+        self, resultado: ResultadoEscaneo
+    ) -> Tuple[List[Tuple], int]:
+        """
+        Lee, optimiza y redacta cada archivo una sola vez.
+
+        Returns:
+            ([(info, contenido, redacciones), ...], total de redacciones)
+        """
+        entradas = []
+        total_redacciones = 0
+
+        for info in sorted(resultado.archivos, key=lambda f: f.ruta_relativa):
+            contenido, redacciones = self._contenido_archivo(info)
+            total_redacciones += redacciones
+            entradas.append((info, contenido, redacciones))
+
+        return entradas, total_redacciones
+
+    def _contenido_archivo(self, info) -> Tuple[str, int]:
+        """
+        Devuelve el contenido optimizado y redactado de un archivo.
+
+        Cachea por ruta, toggles y fecha de modificación, así volver a armar
+        el contexto sobre los mismos archivos no relee ni re-redacta nada.
+        """
+        clave = (
+            str(info.ruta),
+            self.opciones.quitar_comentarios,
+            self.opciones.quitar_lineas_vacias,
+        )
+        sello = self._sello(info.ruta)
+
+        guardado = self._cache.get(clave)
+        if guardado and sello is not None and guardado[0] == sello:
+            info.token_count = guardado[2]
+            return guardado[1], guardado[3]
+
         try:
             contenido = info.ruta.read_text(encoding='utf-8', errors='ignore')
             contenido = self.optimizador.optimizar(info.ruta, contenido, self.opciones)
-            contenido_final, n = self.redactor.redactar(info.ruta, contenido)
+            contenido_final, redacciones = self.redactor.redactar(info.ruta, contenido)
         except Exception:
             logger.debug('No se pudo procesar %s', info.ruta, exc_info=True)
             info.token_count = 0
             return "[Error al leer archivo]", 0
 
-        info.token_count = self.tokenizador.contar(contenido_final)
-        return contenido_final, n
+        tokens = self.tokenizador.contar(contenido_final)
+        info.token_count = tokens
+
+        if sello is not None:
+            self._cache[clave] = (sello, contenido_final, tokens, redacciones)
+
+        return contenido_final, redacciones
+
+    @staticmethod
+    def _sello(ruta) -> Optional[Tuple[int, int]]:
+        """Fecha de modificación y tamaño, para invalidar la caché"""
+        try:
+            estado = ruta.stat()
+        except OSError:
+            return None
+        return (estado.st_mtime_ns, estado.st_size)
 
     def _lenguaje_fence(self, ruta) -> str:
         """Devuelve el lenguaje para el code fence según la extensión"""

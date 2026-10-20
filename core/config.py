@@ -3,6 +3,8 @@ Gestión de configuración persistente
 """
 import json
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Dict
 
@@ -51,18 +53,56 @@ class ConfigManager:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     return {**defectos, **json.load(f)}
             except Exception:
-                logger.warning('No se pudo leer el config, se usan valores por defecto', exc_info=True)
+                logger.warning(
+                    'No se pudo leer el config, se usan valores por defecto',
+                    exc_info=True,
+                )
+                self._respaldar_ilegible()
 
         return defectos
-    
+
+    def _respaldar_ilegible(self):
+        """
+        Guarda una copia del config que no se pudo leer.
+
+        Sin esto, el primer guardado pisaría el archivo roto con los valores
+        por defecto y el usuario perdería sus perfiles y recientes.
+        """
+        respaldo = self.config_path.with_name(
+            self.config_path.name + '.ilegible'
+        )
+        try:
+            shutil.copy2(self.config_path, respaldo)
+            logger.warning('Copia del config ilegible en %s', respaldo)
+        except OSError:
+            logger.warning('No se pudo respaldar el config ilegible', exc_info=True)
+
     def guardar(self):
-        """Guarda la configuración en disco"""
+        """
+        Guarda la configuración en disco.
+
+        Escribe en un temporal y lo reemplaza de forma atómica: si el proceso
+        se corta a mitad de escritura, el archivo anterior queda intacto.
+        """
+        temporal = self.config_path.with_name(self.config_path.name + '.tmp')
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(temporal, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporal, self.config_path)
         except Exception:
             logger.warning('No se pudo guardar el config', exc_info=True)
+            try:
+                temporal.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def establecer(self, **valores):
+        """Actualiza claves de la configuración y guarda una sola vez"""
+        self.config.update(valores)
+        self.guardar()
     
     def agregar_proyecto_reciente(self, ruta: str):
         """Agrega un proyecto a la lista de recientes"""
